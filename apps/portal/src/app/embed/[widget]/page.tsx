@@ -1,6 +1,7 @@
 import { getContainer } from "@rsl/core/container";
 import { WIDGET_CATALOG } from "@rsl/core/embeds";
 import { LiveEmbedClient } from "@/features/embeds/live-embed-client";
+import { auth } from "@/auth";
 import { AlertTriangle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +14,7 @@ interface EmbedPageProps {
     api_key?: string;
     key?: string;
     clientId?: string;
+    client?: string;
     theme?: string;
     accent?: string;
     domainId?: string;
@@ -22,6 +24,9 @@ interface EmbedPageProps {
 function serializeEntity(item: any): any {
   if (item === null || item === undefined) return item;
   if (Array.isArray(item)) return item.map(serializeEntity);
+  if (typeof item.toJSON === "function") {
+    return JSON.parse(JSON.stringify(item.toJSON()));
+  }
   if (typeof item.toState === "function") {
     return JSON.parse(JSON.stringify(item.toState()));
   }
@@ -45,7 +50,7 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
     query.token ||
     ""
   ).trim();
-  const requestedClientId = query.clientId || "";
+  const requestedClientId = (query.clientId || query.client || "").trim();
   const isDark = query.theme !== "light";
   const accent = query.accent || "#2563eb";
 
@@ -84,14 +89,26 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
     }
   }
 
-  // If no client resolved yet and no auth error, fallback to first client for live preview
+  // 2. If no explicit credential or clientId was passed, check active authenticated session
+  if (!resolvedClientId && !authError) {
+    try {
+      const session = await auth();
+      if (session?.user?.clientId) {
+        resolvedClientId = session.user.clientId;
+      }
+    } catch {
+      // Ignore session check failure
+    }
+  }
+
+  // 3. Fallback to first client only for unauthenticated sandbox preview
   if (!resolvedClientId && !authError) {
     try {
       const allClients = await container.clientDirectoryRepo.list({ limit: 1 });
       if (allClients.items.length > 0) {
         resolvedClientId = allClients.items[0].id;
       }
-    } catch (e) {
+    } catch {
       // Ignore preview fallback error
     }
   }
@@ -104,33 +121,42 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
       if (client?.name) {
         clientName = client.name;
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
   }
 
   const widgetDef = WIDGET_CATALOG[widget] || {
-    title: widget.replace(/-/g, " ").toUpperCase(),
+    title: widget
+      .replace(/-/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase()),
     description: "RapidShift Embedded Live Action Widget",
   };
 
-  // If there's an explicit authorization failure, display clear security error
+  // If there's an explicit authorization failure, display card-only security error
   if (authError && !resolvedClientId) {
     return (
-      <div className={`min-h-screen p-6 flex flex-col justify-center items-center font-sans ${isDark ? "bg-slate-950 text-slate-100" : "bg-slate-50 text-slate-900"}`}>
-        <div className={`w-full max-w-md p-6 rounded-2xl border ${isDark ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"} shadow-xl text-center space-y-4`}>
-          <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-500 flex items-center justify-center mx-auto">
-            <AlertTriangle className="w-6 h-6" />
+      <>
+        <style>{`html, body { background: transparent !important; margin: 0 !important; padding: 0 !important; min-height: 0 !important; }`}</style>
+        <div
+          className={`w-full p-6 rounded-2xl border font-sans ${
+            isDark
+              ? "bg-zinc-900 border-zinc-800 text-zinc-100"
+              : "bg-white border-zinc-200 text-zinc-900"
+          } shadow-lg text-center space-y-3`}
+        >
+          <div className="w-11 h-11 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-500 flex items-center justify-center mx-auto">
+            <AlertTriangle className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-base font-bold">Embed Authentication Failed</h2>
-            <p className="text-xs text-slate-400 mt-1">{authError}</p>
+            <h2 className="text-sm font-bold">Embed Authentication Failed</h2>
+            <p className="text-xs text-zinc-400 mt-1">{authError}</p>
           </div>
-          <p className="text-[11px] text-slate-500">
+          <p className="text-[11px] text-zinc-500">
             Generate a permanent Universal API Key (<code className="font-mono">rpk_live_...</code>) in the Client Portal or Embed Studio to authorize all embeds without token expiry.
           </p>
         </div>
-      </div>
+      </>
     );
   }
 
@@ -172,55 +198,137 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
       const invRes = await container.billingRepo.listInvoices({ clientId: resolvedClientId });
       const rawInvoices = (invRes as any)?.items || (Array.isArray(invRes) ? invRes : []);
       invoices = serializeEntity(rawInvoices) || [];
-    } catch (e) {}
+    } catch {}
 
     try {
       const payRes = await container.billingRepo.listPayments({ clientId: resolvedClientId });
       const rawPayments = (payRes as any)?.items || (Array.isArray(payRes) ? payRes : []);
       payments = serializeEntity(rawPayments) || [];
-    } catch (e) {}
+    } catch {}
 
     try {
-      const s = await container.billingRepo.getBillingSummary(resolvedClientId);
-      if (s) {
-        summary = {
-          outstandingMinor: s.outstandingMinor || 0,
-          totalBilledMinor: s.totalBilledMinor || 0,
-          totalPaidMinor: s.totalPaidMinor || 0,
-          overdueMinor: 0,
-          unpaidCount: s.activeInvoicesCount || 0,
-        };
+      const s = await container.billingRepo.getBillingSummary(resolvedClientId).catch(() => null);
+      const nowMs = Date.now();
+      const activeInvoices = invoices.filter(
+        (inv: any) => inv.status !== "cancelled" && inv.status !== "void" && inv.status !== "draft"
+      );
+      const unpaidInvs = activeInvoices.filter((inv: any) => inv.status !== "paid");
+      const computedOutstanding = unpaidInvs.reduce(
+        (acc: number, inv: any) => acc + (Number(inv.balanceMinor ?? inv.totalMinor) || 0),
+        0
+      );
+      const computedBilled = activeInvoices.reduce(
+        (acc: number, inv: any) => acc + (Number(inv.totalMinor) || 0),
+        0
+      );
+      const computedPaid = payments.reduce(
+        (acc: number, p: any) => acc + (Number(p.amountMinor) || 0),
+        0
+      );
+      const computedOverdue = unpaidInvs
+        .filter(
+          (inv: any) =>
+            inv.status === "overdue" ||
+            (inv.dueDate && new Date(inv.dueDate).getTime() < nowMs)
+        )
+        .reduce(
+          (acc: number, inv: any) => acc + (Number(inv.balanceMinor ?? inv.totalMinor) || 0),
+          0
+        );
+
+      summary = {
+        outstandingMinor: s?.outstandingMinor ?? computedOutstanding,
+        totalBilledMinor: s?.totalBilledMinor ?? computedBilled,
+        totalPaidMinor: s?.totalPaidMinor ?? computedPaid,
+        overdueMinor: computedOverdue,
+        unpaidCount: unpaidInvs.length,
+      };
+    } catch {}
+
+    try {
+      const [procs, servers] = await Promise.all([
+        container.pm2ProcessRepo.listByClientId(resolvedClientId),
+        container.fleetModule.listServers().catch(() => []),
+      ]);
+      const serverMap = new Map<string, { name: string; host: string }>();
+      for (const srv of servers || []) {
+        const snap = srv as any;
+        if (snap?.id) {
+          serverMap.set(snap.id, { name: snap.name, host: snap.host });
+        }
       }
-    } catch (e) {}
+      const rawProcs = serializeEntity(procs || []) || [];
+      processes = rawProcs.map((p: any) => {
+        const srv = serverMap.get(p.serverId);
+        return {
+          ...p,
+          cpu: Number(p.cpu ?? p.cpuPercent ?? 0),
+          memory: Number(p.memory ?? p.memoryBytes ?? 0),
+          restarts: Number(p.restarts ?? 0),
+          uptimeMs: Number(p.uptimeMs ?? 0),
+          serverName: srv?.name || p.serverName || "Managed Host",
+          serverHost: srv?.host || p.serverHost || "",
+        };
+      });
+    } catch {}
 
     try {
-      const procs = await container.pm2ProcessRepo.listByClientId(resolvedClientId);
-      processes = serializeEntity(procs || []) || [];
-    } catch (e) {}
-
-    try {
-      const doms = await container.monitoredDomainRepo.findByClientId(resolvedClientId);
+      const [doms, activeIncidents, recentIncidents] = await Promise.all([
+        container.monitoredDomainRepo.findByClientId(resolvedClientId),
+        container.incidentRepo.findActiveByClientId(resolvedClientId).catch(() => []),
+        container.incidentRepo.findRecentByClientId(resolvedClientId, 10).catch(() => []),
+      ]);
       const serializedDoms = serializeEntity(doms || []) || [];
+      const allClientIncidents = serializeEntity([
+        ...(activeIncidents || []),
+        ...(recentIncidents || []),
+      ]) || [];
       if (query.domainId && Array.isArray(serializedDoms)) {
-        // Move requested domainId to front if present
-        const idx = serializedDoms.findIndex((d: any) => d.id === query.domainId || d.props?.id === query.domainId);
+        const idx = serializedDoms.findIndex(
+          (d: any) => d.id === query.domainId || d.props?.id === query.domainId
+        );
         if (idx > 0) {
           const matched = serializedDoms.splice(idx, 1)[0];
           serializedDoms.unshift(matched);
         }
       }
+      // Enrich domains with active/recent incident counts
+      for (const dom of serializedDoms) {
+        const domIncidents = allClientIncidents.filter(
+          (inc: any) => inc.domainId === dom.id
+        );
+        dom.incidents = domIncidents.slice(0, 5);
+        dom.openIncidentsCount = domIncidents.filter(
+          (inc: any) => inc.status !== "resolved"
+        ).length;
+      }
       domains = serializedDoms;
-    } catch (e) {}
+    } catch {}
 
     try {
-      const tix = await container.ticketRepo.list({ clientId: resolvedClientId });
-      tickets = serializeEntity(tix || []) || [];
-    } catch (e) {}
+      const tixRes = await container.ticketRepo.list({ clientId: resolvedClientId });
+      const rawTickets =
+        (tixRes as any)?.tickets ||
+        (tixRes as any)?.items ||
+        (Array.isArray(tixRes) ? tixRes : []);
+      const serializedTickets = serializeEntity(rawTickets) || [];
+      // Hydrate conversation messages for recent tickets
+      for (const t of serializedTickets.slice(0, 8)) {
+        try {
+          const msgs = await container.ticketRepo.listMessages(t.id, false);
+          t.messages = serializeEntity(msgs || []) || [];
+        } catch {
+          t.messages = [];
+        }
+      }
+      tickets = serializedTickets;
+    } catch {}
 
     try {
       const creds = await container.vaultRepo.list({ clientId: resolvedClientId });
-      credentials = serializeEntity(creds || []) || [];
-    } catch (e) {}
+      const rawCreds = (creds as any)?.items || (Array.isArray(creds) ? creds : []);
+      credentials = serializeEntity(rawCreds) || [];
+    } catch {}
 
     try {
       const relResult = await container.releases.listReleasesUseCase.execute(
@@ -234,14 +342,19 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
           role: "client_admin",
         }
       );
-      releases = serializeEntity(relResult || []) || [];
-    } catch (e) {}
+      const rawReleases =
+        (relResult as any)?.items ||
+        (relResult as any)?.releases ||
+        (Array.isArray(relResult) ? relResult : []);
+      releases = serializeEntity(rawReleases) || [];
+    } catch {}
 
     try {
       const contractRes = await container.contractRepo.list({ clientId: resolvedClientId });
-      const rawContracts = (contractRes as any)?.items || (Array.isArray(contractRes) ? contractRes : []);
+      const rawContracts =
+        (contractRes as any)?.items || (Array.isArray(contractRes) ? contractRes : []);
       contracts = serializeEntity(rawContracts) || [];
-    } catch (e) {}
+    } catch {}
 
     try {
       const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
@@ -296,46 +409,49 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
           };
         }
       }
-    } catch (e) {}
+    } catch {}
   }
 
   return (
-    <LiveEmbedClient
-      widget={widget}
-      widgetTitle={widgetDef.title}
-      widgetDescription={widgetDef.description}
-      clientId={resolvedClientId || "preview"}
-      clientName={clientName}
-      token={rawCredential}
-      isDark={isDark}
-      accent={accent}
-      initialData={{
-        invoices,
-        payments,
-        summary,
-        processes,
-        domains,
-        tickets,
-        credentials,
-        releases,
-        contracts: (contracts as any[]) || [],
-        analytics: (analytics as any) || {
-          pageviews: 0,
-          visitors: 0,
-          repeatVisitors: 0,
-          repeatRate: 0,
-          bounceRate: 0,
-          activeVisitorsNow: 0,
-          avgDurationSec: 0,
-          avgLcpMs: null,
-          topPaths: [],
-          topReferrers: [],
-          countries: [],
-          webVitals: [],
-          timeseries: [],
-          visitorSessions: [],
-        },
-      }}
-    />
+    <>
+      <style>{`html, body { background: transparent !important; margin: 0 !important; padding: 0 !important; min-height: 0 !important; overflow-x: hidden; }`}</style>
+      <LiveEmbedClient
+        widget={widget}
+        widgetTitle={widgetDef.title}
+        widgetDescription={widgetDef.description}
+        clientId={resolvedClientId || "preview"}
+        clientName={clientName}
+        token={rawCredential}
+        isDark={isDark}
+        accent={accent}
+        initialData={{
+          invoices,
+          payments,
+          summary,
+          processes,
+          domains,
+          tickets,
+          credentials,
+          releases,
+          contracts: (contracts as any[]) || [],
+          analytics: (analytics as any) || {
+            pageviews: 0,
+            visitors: 0,
+            repeatVisitors: 0,
+            repeatRate: 0,
+            bounceRate: 0,
+            activeVisitorsNow: 0,
+            avgDurationSec: 0,
+            avgLcpMs: null,
+            topPaths: [],
+            topReferrers: [],
+            countries: [],
+            webVitals: [],
+            timeseries: [],
+            visitorSessions: [],
+          },
+        }}
+      />
+    </>
   );
 }

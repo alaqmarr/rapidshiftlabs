@@ -165,6 +165,17 @@ function formatNumber(num: number = 0): string {
   return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
+function formatUptime(uptimeMs: number | null | undefined): string {
+  if (!uptimeMs || uptimeMs <= 0) return "0m";
+  const totalSec = Math.floor(uptimeMs / 1000);
+  const days = Math.floor(totalSec / 86400);
+  const hours = Math.floor((totalSec % 86400) / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${ Math.max(1, mins)}m`;
+}
+
 // =========================================================================
 // MAIN EMBED COMPONENT
 // =========================================================================
@@ -248,19 +259,21 @@ export function LiveEmbedClient({
 
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-resize communication for parent iframes
+  // Auto-resize communication for parent iframes & web components
   useEffect(() => {
     function notifyParentResize() {
       if (typeof window !== "undefined" && window.parent && containerRef.current) {
-        const height = containerRef.current.scrollHeight;
-        window.parent.postMessage({ type: "rsl-embed-resize", height }, "*");
+        const rectHeight = Math.ceil(containerRef.current.getBoundingClientRect().height);
+        const scrollHeight = Math.ceil(containerRef.current.scrollHeight);
+        const height = Math.max(rectHeight, scrollHeight);
+        window.parent.postMessage({ type: "rsl-embed-resize", height, widget }, "*");
       }
     }
     notifyParentResize();
     const ro = new ResizeObserver(notifyParentResize);
     if (containerRef.current) ro.observe(containerRef.current);
     return () => ro.disconnect();
-  }, [invoices, payments, processes, domains, tickets, activeModal, dashboardTab]);
+  }, [widget, invoices, payments, processes, domains, tickets, credentials, releases, activeModal, dashboardTab, invoiceFilter, invoiceSearch]);
 
   // Cooldown countdown timer
   useEffect(() => {
@@ -590,10 +603,9 @@ export function LiveEmbedClient({
   };
 
   // Unified Typography & Theme Classes - High-Contrast & Beautiful in Both Modes
-  const bgClass = isDark ? "bg-zinc-950 text-zinc-100" : "bg-slate-50 text-zinc-900";
   const cardBgClass = isDark
-    ? "bg-zinc-900/95 border-zinc-800 text-zinc-100 shadow-2xl"
-    : "bg-white border-zinc-200 text-zinc-900 shadow-xl";
+    ? "bg-zinc-900 border-zinc-800 text-zinc-100 shadow-lg"
+    : "bg-white border-zinc-200 text-zinc-900 shadow-md";
   const headerBorderClass = isDark ? "border-zinc-800/80" : "border-zinc-200";
   const itemBgClass = isDark
     ? "bg-zinc-800/40 border-zinc-700/50 hover:border-zinc-600/70 text-zinc-200"
@@ -613,22 +625,28 @@ export function LiveEmbedClient({
   const isInvoiceWidget =
     widget === "invoice-history" ||
     widget === "invoice-list" ||
-    widget === "invoice-detail";
-  const isPaymentWidget = widget === "payment-history";
+    widget === "invoice-detail" ||
+    widget.includes("invoice");
+  const isPaymentWidget =
+    widget === "payment-history" ||
+    widget.includes("payment");
   const isBillingSummaryWidget =
     widget === "billing-summary" ||
     widget === "due-banner" ||
     widget === "next-due-countdown" ||
     widget === "contract-card" ||
     widget.includes("billing") ||
-    widget.includes("due");
+    widget.includes("due") ||
+    widget.includes("contract");
   const isFleetWidget =
     widget === "server-status" ||
     widget === "process-list" ||
     widget === "process-card" ||
     widget === "metrics-chart" ||
     widget.includes("server") ||
-    widget.includes("process");
+    widget.includes("process") ||
+    widget.includes("metric") ||
+    widget.includes("fleet");
   const isDomainWidget =
     widget === "domain-status" ||
     widget === "uptime-badge" ||
@@ -636,21 +654,49 @@ export function LiveEmbedClient({
     widget === "status-page" ||
     widget.includes("domain") ||
     widget.includes("uptime") ||
-    widget.includes("ssl");
+    widget.includes("ssl") ||
+    widget.includes("status-page");
   const isTicketWidget =
     widget === "ticket-desk" ||
     widget === "ticket-widget" ||
+    widget === "ticket-list" ||
     widget === "ticket-thread" ||
-    widget.includes("ticket");
-  const isVaultWidget = widget === "vault-secret" || widget.includes("vault");
-  const isReleaseWidget = widget === "releases-list" || widget.includes("release");
+    widget.includes("ticket") ||
+    widget.includes("support");
+  const isVaultWidget =
+    widget === "vault-secret" ||
+    widget.includes("vault") ||
+    widget.includes("credential");
+  const isReleaseWidget =
+    widget === "releases-list" ||
+    widget === "release-list" ||
+    widget.includes("release");
   const isAnalyticsWidget =
     widget === "analytics-overview" ||
     widget === "analytics-chart" ||
+    widget === "pageview-chart" ||
+    widget === "traffic-chart" ||
+    widget === "visitor-journeys" ||
     widget === "top-pages" ||
     widget === "web-vitals" ||
-    widget.includes("analytics");
-  const isDashboardWidget = widget === "client-dashboard";
+    widget.includes("analytics") ||
+    widget.includes("pageview") ||
+    widget.includes("vital") ||
+    widget.includes("visitor") ||
+    widget.includes("top-page");
+  const isExplicitDashboard = widget === "client-dashboard";
+  const isUnmatchedWidget =
+    !isInvoiceWidget &&
+    !isPaymentWidget &&
+    !isBillingSummaryWidget &&
+    !isFleetWidget &&
+    !isDomainWidget &&
+    !isTicketWidget &&
+    !isVaultWidget &&
+    !isReleaseWidget &&
+    !isAnalyticsWidget &&
+    !isExplicitDashboard;
+  const isDashboardWidget = isExplicitDashboard || isUnmatchedWidget;
 
   // Configuration check helpers
   const isBillingConfigured =
@@ -662,7 +708,9 @@ export function LiveEmbedClient({
   const isAnalyticsConfigured = (analytics.pageviews || 0) > 0;
 
   // Invoice calculations
-  const unpaidInvoices = invoices.filter((i) => i.status !== "paid");
+  const unpaidInvoices = invoices.filter(
+    (i) => i.status !== "paid" && i.status !== "cancelled" && i.status !== "void" && i.status !== "draft"
+  );
   const paidInvoices = invoices.filter((i) => i.status === "paid");
   const unpaidCount = unpaidInvoices.length;
   const paidCount = paidInvoices.length;
@@ -681,238 +729,438 @@ export function LiveEmbedClient({
     return true;
   });
 
+  // Root is strictly the Card itself — no outer min-h-screen wrapper div
   return (
     <div
       ref={containerRef}
       suppressHydrationWarning
-      className={`min-h-screen p-4 flex flex-col justify-center items-center font-sans ${bgClass}`}
+      className={`w-full p-5 sm:p-6 rounded-2xl border font-sans ${cardBgClass} ${
+        activeModal ? "min-h-[440px]" : ""
+      } relative overflow-hidden transition-all duration-200`}
     >
+      {/* Subtle Category Gradient Top Line */}
       <div
-        className={`w-full max-w-xl sm:max-w-2xl p-6 rounded-2xl border ${cardBgClass} relative overflow-hidden transition-all duration-200`}
-      >
-        {/* Subtle Category Gradient Top Line */}
+        className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r"
+        style={{
+          backgroundImage: `linear-gradient(to right, ${accent}, #3b82f6)`,
+        }}
+      />
+
+      {/* Global Alert Notification Banner */}
+      {bannerAlert && (
         <div
-          className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r"
-          style={{
-            backgroundImage: `linear-gradient(to right, ${accent}, #3b82f6)`,
-          }}
-        />
-
-        {/* Global Alert Notification Banner */}
-        {bannerAlert && (
-          <div
-            className={`mb-4 px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
-              bannerAlert.type === "success"
-                ? "bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border border-emerald-500/30"
-                : "bg-rose-500/15 text-rose-500 dark:text-rose-400 border border-rose-500/30"
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              {bannerAlert.type === "success" ? (
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-              ) : (
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-              )}
-              <span>{bannerAlert.message}</span>
-            </div>
-            <button
-              onClick={() => setBannerAlert(null)}
-              className="text-zinc-400 hover:text-zinc-200 p-0.5 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* Header */}
-        <div className={`flex items-center justify-between pb-4 mb-4 border-b ${headerBorderClass}`}>
-          <div className="flex items-center gap-2.5">
-            <span
-              className="w-2.5 h-2.5 rounded-full animate-pulse shadow-xs shrink-0"
-              style={{ backgroundColor: accent }}
-            />
-            <div>
-              <h2 className={`text-base font-extrabold tracking-tight capitalize leading-tight font-steel ${headingTextClass}`}>
-                {widgetTitle}
-              </h2>
-              <span className={`text-[11px] font-medium font-sans ${subtleTextClass}`}>
-                {clientName} &bull; Live Action
-              </span>
-            </div>
-          </div>
+          className={`mb-4 px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
+            bannerAlert.type === "success"
+              ? "bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border border-emerald-500/30"
+              : "bg-rose-500/15 text-rose-500 dark:text-rose-400 border border-rose-500/30"
+          }`}
+        >
           <div className="flex items-center gap-2">
-            <span
-              className={`text-[10px] px-2.5 py-0.5 rounded-md font-bold uppercase tracking-wider font-tech ${
-                isDark
-                  ? "bg-zinc-800 text-zinc-300 border border-zinc-700"
-                  : "bg-zinc-100 text-zinc-600 border border-zinc-200"
-              }`}
-            >
-              RapidShift
+            {bannerAlert.type === "success" ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+            )}
+            <span>{bannerAlert.message}</span>
+          </div>
+          <button
+            onClick={() => setBannerAlert(null)}
+            className="text-zinc-400 hover:text-zinc-200 p-0.5 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Header */}
+      <div className={`flex items-center justify-between pb-3.5 mb-4 border-b ${headerBorderClass}`}>
+        <div className="flex items-center gap-2.5">
+          <span
+            className="w-2.5 h-2.5 rounded-full animate-pulse shadow-xs shrink-0"
+            style={{ backgroundColor: accent }}
+          />
+          <div>
+            <h2 className={`text-base font-extrabold tracking-tight capitalize leading-tight font-steel ${headingTextClass}`}>
+              {widgetTitle}
+            </h2>
+            <span className={`text-[11px] font-medium font-sans ${subtleTextClass}`}>
+              {clientName} &bull; Live Action
             </span>
           </div>
         </div>
-
-        {/* All-in-One Dashboard Tab Switcher */}
-        {isDashboardWidget && (
-          <div
-            className={`flex items-center gap-1.5 p-1 rounded-xl mb-4 text-xs font-semibold ${
-              isDark ? "bg-zinc-800/40 border border-zinc-700/60" : "bg-zinc-100 border border-zinc-200"
+        <div className="flex items-center gap-2">
+          <span
+            className={`text-[10px] px-2.5 py-0.5 rounded-md font-bold uppercase tracking-wider font-tech ${
+              isDark
+                ? "bg-zinc-800 text-zinc-300 border border-zinc-700"
+                : "bg-zinc-100 text-zinc-600 border border-zinc-200"
             }`}
           >
-            {(["billing", "fleet", "domains", "support"] as const).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setDashboardTab(tab)}
-                className={`flex-1 py-1.5 rounded-lg capitalize transition cursor-pointer font-steel tracking-wide ${
-                  dashboardTab === tab
-                    ? "bg-blue-600 text-white shadow-xs font-bold"
-                    : isDark
-                    ? "text-zinc-400 hover:text-white"
-                    : "text-zinc-600 hover:text-zinc-900"
-                }`}
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
-        )}
+            RapidShift
+          </span>
+        </div>
+      </div>
 
-        {/* ========================================================================= */}
-        {/* SECTION 1: BILLING SUMMARY & DUE                                          */}
-        {/* ========================================================================= */}
-        {(isBillingSummaryWidget || (isDashboardWidget && dashboardTab === "billing")) && (
-          <div className="space-y-3">
-            {!isBillingConfigured ? (
-              <NotConfiguredCard
-                icon={CreditCard}
-                badgeText="RETAINER NOT CONFIGURED"
-                title="No Active Billing Agreement or Retainer"
-                description="There is currently no active service agreement or billing contract registered for this client account in the control panel."
-                benefits={[
-                  "Live Outstanding Balance Tracking",
-                  "Automated GST Tax Invoicing",
-                  "Instant In-Place Settlements",
-                  "Official Audit & PDF Receipts",
-                ]}
-                steps={[
-                  {
-                    step: 1,
-                    title: "Align on Retainer Scope",
-                    description:
-                      "Confirm contract tenure (e.g. 12 months) and billing cycle (Monthly/Quarterly/Annual) with your account executive.",
-                  },
-                  {
-                    step: 2,
-                    title: "Submit GST & Entity Particulars",
-                    description:
-                      "Provide official company name, GSTIN (if registered for input tax credit), and billing email contact.",
-                  },
-                  {
-                    step: 3,
-                    title: "Contract Activation",
-                    description:
-                      "RapidShift finance desk will activate the contract and publish your scheduled billing anchor dates.",
-                  },
-                ]}
-                actionText="Request Retainer & Invoicing Setup"
-                onAction={() =>
-                  openSetupTicket(
-                    "Billing Retainer & Contract Setup",
-                    `Hi RapidShift Billing Desk,\n\nPlease help us configure our service retainer contract and billing particulars.\n\nCompany Billing Information:\n- Entity Name: ${clientName}\n- GSTIN (if applicable): \n- Billing Contact Email: \n- Preferred Cycle: Monthly`,
-                    "billing"
-                  )
-                }
-                isDark={isDark}
-                accent={accent}
-              />
-            ) : (
-              <>
-                {/* Gradient KPI Highlight Card */}
-                {summary.outstandingMinor > 0 ? (
-                  <div className="p-4 rounded-xl bg-gradient-to-br from-rose-500/10 via-blue-500/5 to-transparent border border-rose-500/20 flex items-center justify-between">
-                    <div>
-                      <span className={`text-[11px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>Current Balance Due</span>
-                      <div className="text-2xl sm:text-3xl font-black font-steel tracking-tight text-rose-500 mt-0.5 tabular-nums">
-                        ₹{formatMinorToINR(summary.outstandingMinor)}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="px-2.5 py-1 rounded-md bg-rose-500/15 text-rose-500 dark:text-rose-400 border border-rose-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
-                        Due
-                      </span>
-                      {unpaidInvoices[0] && (
-                        <button
-                          onClick={() => {
-                            setSelectedInvoice(unpaidInvoices[0]);
-                            setActiveModal("pay");
-                          }}
-                          className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold font-steel shadow-md transition cursor-pointer flex items-center gap-1.5"
+      {/* All-in-One Dashboard Tab Switcher */}
+      {isDashboardWidget && (
+        <div
+          className={`flex items-center gap-1.5 p-1 rounded-xl mb-4 text-xs font-semibold ${
+            isDark ? "bg-zinc-800/40 border border-zinc-700/60" : "bg-zinc-100 border border-zinc-200"
+          }`}
+        >
+          {(["billing", "fleet", "domains", "support"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setDashboardTab(tab)}
+              className={`flex-1 py-1.5 rounded-lg capitalize transition cursor-pointer font-steel tracking-wide ${
+                dashboardTab === tab
+                  ? "bg-blue-600 text-white shadow-xs font-bold"
+                  : isDark
+                  ? "text-zinc-400 hover:text-white"
+                  : "text-zinc-600 hover:text-zinc-900"
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* SECTION 1: BILLING SUMMARY, DUE BANNER, COUNTDOWN & CONTRACT CARD         */}
+      {/* ========================================================================= */}
+      {(isBillingSummaryWidget || (isDashboardWidget && dashboardTab === "billing")) && (
+        <div className="space-y-3">
+          {!isBillingConfigured ? (
+            <NotConfiguredCard
+              icon={CreditCard}
+              badgeText="RETAINER NOT CONFIGURED"
+              title="No Active Billing Agreement or Retainer"
+              description="There is currently no active service agreement or billing contract registered for this client account in the control panel."
+              benefits={[
+                "Live Outstanding Balance Tracking",
+                "Automated GST Tax Invoicing",
+                "Instant In-Place Settlements",
+                "Official Audit & PDF Receipts",
+              ]}
+              steps={[
+                {
+                  step: 1,
+                  title: "Align on Retainer Scope",
+                  description:
+                    "Confirm contract tenure (e.g. 12 months) and billing cycle (Monthly/Quarterly/Annual) with your account executive.",
+                },
+                {
+                  step: 2,
+                  title: "Submit GST & Entity Particulars",
+                  description:
+                    "Provide official company name, GSTIN (if registered for input tax credit), and billing email contact.",
+                },
+                {
+                  step: 3,
+                  title: "Contract Activation",
+                  description:
+                    "RapidShift finance desk will activate the contract and publish your scheduled billing anchor dates.",
+                },
+              ]}
+              actionText="Request Retainer & Invoicing Setup"
+              onAction={() =>
+                openSetupTicket(
+                  "Billing Retainer & Contract Setup",
+                  `Hi RapidShift Billing Desk,\n\nPlease help us configure our service retainer contract and billing particulars.\n\nCompany Billing Information:\n- Entity Name: ${clientName}\n- GSTIN (if applicable): \n- Billing Contact Email: \n- Preferred Cycle: Monthly`,
+                  "billing"
+                )
+              }
+              isDark={isDark}
+              accent={accent}
+            />
+          ) : widget === "contract-card" ? (
+            /* DEDICATED VIEW: CONTRACT CARD */
+            <div className="space-y-2.5">
+              {contracts.length === 0 ? (
+                <div className={`p-4 rounded-xl border ${itemBgClass} text-xs text-center ${subtleTextClass}`}>
+                  No active contracts registered for {clientName}. ({invoices.length} standalone invoice(s) on file).
+                </div>
+              ) : (
+                contracts.map((ctr: any) => {
+                  const isActive = ctr.status === "active";
+                  return (
+                    <div key={ctr.id} className={`p-4 rounded-xl border ${itemBgClass} space-y-3 text-xs`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className={`font-steel font-bold text-sm ${headingTextClass}`}>
+                              {ctr.title}
+                            </span>
+                            <span className={`font-mono text-[10px] ${subtleTextClass}`}>
+                              ({ctr.code})
+                            </span>
+                          </div>
+                          <p className={`text-[11px] mt-0.5 ${subtleTextClass}`} suppressHydrationWarning>
+                            Tenure: {formatDate(ctr.validFrom)} &rarr; {formatDate(ctr.validTo)}
+                          </p>
+                        </div>
+                        <span
+                          className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider font-tech ${
+                            isActive
+                              ? "bg-emerald-500/15 text-emerald-500 border border-emerald-500/30"
+                              : "bg-amber-500/15 text-amber-500 border border-amber-500/30"
+                          }`}
                         >
-                          <CreditCard className="w-3.5 h-3.5" />
-                          <span>Pay Now</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-4 rounded-xl bg-gradient-to-br from-emerald-500/10 via-blue-500/5 to-transparent border border-emerald-500/20 flex items-center justify-between">
-                    <div>
-                      <span className={`text-[11px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>Current Balance Due</span>
-                      <div className="text-xl sm:text-2xl font-black font-steel tracking-tight text-emerald-500 mt-0.5 flex items-center gap-1.5">
-                        <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-                        <span>Paid in Full</span>
+                          {ctr.status}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className={`p-2.5 rounded-lg border ${isDark ? "bg-zinc-900/60 border-zinc-800" : "bg-white border-zinc-200"}`}>
+                          <div className={`text-[10px] uppercase font-bold ${subtleTextClass}`}>Retainer</div>
+                          <div className={`font-mono font-bold text-xs mt-0.5 ${headingTextClass}`}>
+                            ₹{formatMinorToINR(ctr.amountMinor)}
+                          </div>
+                        </div>
+                        <div className={`p-2.5 rounded-lg border ${isDark ? "bg-zinc-900/60 border-zinc-800" : "bg-white border-zinc-200"}`}>
+                          <div className={`text-[10px] uppercase font-bold ${subtleTextClass}`}>Cycle</div>
+                          <div className={`font-mono font-bold text-xs uppercase mt-0.5 ${headingTextClass}`}>
+                            {ctr.billingCycle?.replace("_", " ")} (Day {ctr.anchorDay || 1})
+                          </div>
+                        </div>
+                        <div className={`p-2.5 rounded-lg border ${isDark ? "bg-zinc-900/60 border-zinc-800" : "bg-white border-zinc-200"}`}>
+                          <div className={`text-[10px] uppercase font-bold ${subtleTextClass}`}>Tax Mode</div>
+                          <div className={`font-mono font-bold text-xs uppercase mt-0.5 ${headingTextClass}`}>
+                            {ctr.taxProfile === "gst" ? `GST ${Math.round((ctr.gstRateBps || 1800) / 100)}%` : "Non-GST"}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <span className="px-3 py-1 rounded-md bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
-                      Settled
-                    </span>
+                  );
+                })
+              )}
+            </div>
+          ) : widget === "next-due-countdown" ? (
+            /* DEDICATED VIEW: NEXT DUE COUNTDOWN */
+            (() => {
+              const targetInvoice = unpaidInvoices[0];
+              const dueMs = targetInvoice?.dueDate ? new Date(targetInvoice.dueDate).getTime() : null;
+              const diffDays = dueMs ? Math.ceil((dueMs - Date.now()) / (1000 * 60 * 60 * 24)) : null;
+              const isOverdue = diffDays !== null && diffDays < 0;
+
+              return (
+                <div className="space-y-3">
+                  <div
+                    className={`p-4 rounded-xl border flex items-center justify-between ${
+                      targetInvoice
+                        ? isOverdue
+                          ? "bg-rose-500/10 border-rose-500/30"
+                          : "bg-amber-500/10 border-amber-500/30"
+                        : "bg-emerald-500/10 border-emerald-500/30"
+                    }`}
+                  >
+                    <div>
+                      <span className={`text-[10px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>
+                        {targetInvoice
+                          ? `Invoice ${targetInvoice.invoiceNumber} Due Date`
+                          : "Account Settlement Status"}
+                      </span>
+                      <div
+                        className={`text-2xl font-black font-steel tracking-tight mt-0.5 ${
+                          targetInvoice
+                            ? isOverdue
+                              ? "text-rose-500"
+                              : "text-amber-500"
+                            : "text-emerald-500"
+                        }`}
+                        suppressHydrationWarning
+                      >
+                        {targetInvoice
+                          ? diffDays === 0
+                            ? "Due Today"
+                            : isOverdue
+                            ? `${Math.abs(diffDays!)} Days Overdue`
+                            : `Due in ${diffDays} Days`
+                          : "No Pending Dues"}
+                      </div>
+                      <p className={`text-[11px] mt-0.5 ${subtleTextClass}`} suppressHydrationWarning>
+                        {targetInvoice
+                          ? `Target Date: ${formatDate(targetInvoice.dueDate)} • Balance: ₹${formatMinorToINR(
+                              targetInvoice.balanceMinor ?? targetInvoice.totalMinor
+                            )}`
+                          : contracts[0]
+                          ? `Active ${contracts[0].billingCycle} retainer • Anchor Day ${contracts[0].anchorDay || 1}`
+                          : `${paidCount} settled invoice(s) on record`}
+                      </p>
+                    </div>
+                    {targetInvoice && (
+                      <button
+                        onClick={() => {
+                          setSelectedInvoice(targetInvoice);
+                          setActiveModal("pay");
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold font-steel shadow-md transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                      >
+                        <CreditCard className="w-3.5 h-3.5" />
+                        <span>Settle Now</span>
+                      </button>
+                    )}
                   </div>
+                </div>
+              );
+            })()
+          ) : widget === "due-banner" ? (
+            /* DEDICATED VIEW: COMPACT DUE BANNER */
+            summary.outstandingMinor > 0 ? (
+              <div className="p-4 rounded-xl bg-gradient-to-r from-rose-500/15 via-rose-500/5 to-transparent border border-rose-500/30 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-500 flex items-center justify-center shrink-0">
+                    <AlertTriangle className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className={`text-sm font-extrabold font-steel ${headingTextClass}`}>
+                      Outstanding Balance: ₹{formatMinorToINR(summary.outstandingMinor)}
+                    </div>
+                    <p className={`text-[11px] ${subtleTextClass}`} suppressHydrationWarning>
+                      {unpaidCount} unpaid invoice{unpaidCount === 1 ? "" : "s"}
+                      {unpaidInvoices[0]?.dueDate ? ` • Earliest Due: ${formatDate(unpaidInvoices[0].dueDate)}` : ""}
+                    </p>
+                  </div>
+                </div>
+                {unpaidInvoices[0] && (
+                  <button
+                    onClick={() => {
+                      setSelectedInvoice(unpaidInvoices[0]);
+                      setActiveModal("pay");
+                    }}
+                    className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold font-steel shadow-md transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <CreditCard className="w-3.5 h-3.5" />
+                    <span>Pay ₹{formatMinorToINR(unpaidInvoices[0].balanceMinor ?? unpaidInvoices[0].totalMinor)}</span>
+                  </button>
                 )}
-
-                {/* Next Cycle & Retainer Rows */}
-                <div className={`p-3.5 rounded-xl border ${itemBgClass} flex items-center justify-between text-xs`}>
-                  <span className={`font-sans font-medium ${subtleTextClass}`}>Next Billing Anchor</span>
-                  <span className={`font-tech font-bold tracking-tight ${headingTextClass}`}>
-                    {contracts[0]?.billingCycle
-                      ? `${contracts[0].billingCycle.toUpperCase()} (Anchor: Day ${contracts[0].anchorDay || 1})`
-                      : "1st of Next Month"}
+              </div>
+            ) : (
+              <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-500/15 via-emerald-500/5 to-transparent border border-emerald-500/30 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+                  <div>
+                    <div className={`text-sm font-extrabold font-steel ${headingTextClass}`}>
+                      All Invoices Settled &bull; ₹0 Due
+                    </div>
+                    <p className={`text-[11px] ${subtleTextClass}`}>
+                      Total Paid: ₹{formatMinorToINR(summary.totalPaidMinor)} across {paidCount} invoice{paidCount === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                </div>
+                <span className="px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
+                  Active
+                </span>
+              </div>
+            )
+          ) : (
+            /* DEFAULT BILLING SUMMARY & DASHBOARD BILLING TAB */
+            <>
+              {summary.outstandingMinor > 0 ? (
+                <div className="p-4 rounded-xl bg-gradient-to-br from-rose-500/10 via-blue-500/5 to-transparent border border-rose-500/20 flex items-center justify-between">
+                  <div>
+                    <span className={`text-[11px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>Current Balance Due</span>
+                    <div className="text-2xl sm:text-3xl font-black font-steel tracking-tight text-rose-500 mt-0.5 tabular-nums">
+                      ₹{formatMinorToINR(summary.outstandingMinor)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-1 rounded-md bg-rose-500/15 text-rose-500 dark:text-rose-400 border border-rose-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
+                      {summary.overdueMinor > 0 ? "Overdue" : `${unpaidCount} Due`}
+                    </span>
+                    {unpaidInvoices[0] && (
+                      <button
+                        onClick={() => {
+                          setSelectedInvoice(unpaidInvoices[0]);
+                          setActiveModal("pay");
+                        }}
+                        className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold font-steel shadow-md transition cursor-pointer flex items-center gap-1.5"
+                      >
+                        <CreditCard className="w-3.5 h-3.5" />
+                        <span>Pay Now</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl bg-gradient-to-br from-emerald-500/10 via-blue-500/5 to-transparent border border-emerald-500/20 flex items-center justify-between">
+                  <div>
+                    <span className={`text-[11px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>Current Balance Due</span>
+                    <div className="text-xl sm:text-2xl font-black font-steel tracking-tight text-emerald-500 mt-0.5 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                      <span>Paid in Full</span>
+                    </div>
+                  </div>
+                  <span className="px-3 py-1 rounded-md bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
+                    Settled
                   </span>
                 </div>
+              )}
 
+              {/* Real 3-Column Financial Ledger Totals */}
+              <div className="grid grid-cols-3 gap-2.5 text-center text-xs">
+                <div className={`p-3 rounded-xl border ${itemBgClass}`}>
+                  <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>Total Billed</p>
+                  <p className={`font-tech font-bold text-xs mt-0.5 tracking-tight tabular-nums ${headingTextClass}`}>
+                    ₹{formatMinorToINR(summary.totalBilledMinor)}
+                  </p>
+                </div>
+                <div className={`p-3 rounded-xl border ${itemBgClass}`}>
+                  <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>Total Paid</p>
+                  <p className="font-tech font-bold text-xs text-emerald-500 mt-0.5 tracking-tight tabular-nums">
+                    ₹{formatMinorToINR(summary.totalPaidMinor)}
+                  </p>
+                </div>
+                <div className={`p-3 rounded-xl border ${itemBgClass}`}>
+                  <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>Overdue</p>
+                  <p className={`font-tech font-bold text-xs mt-0.5 tracking-tight tabular-nums ${summary.overdueMinor > 0 ? "text-rose-500" : headingTextClass}`}>
+                    ₹{formatMinorToINR(summary.overdueMinor)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Real Contract Details Row (if contract exists) */}
+              {contracts[0] && (
                 <div className={`p-3.5 rounded-xl border ${itemBgClass} flex items-center justify-between text-xs`}>
-                  <span className={`font-sans font-medium ${subtleTextClass}`}>Active Retainer SLA</span>
-                  <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-500 text-[10px] font-bold font-tech tracking-wider">
-                    OPERATIONAL
+                  <div>
+                    <span className={`font-semibold ${headingTextClass}`}>{contracts[0].title}</span>
+                    <p className={`text-[10px] ${subtleTextClass}`} suppressHydrationWarning>
+                      Cycle: {contracts[0].billingCycle?.toUpperCase()} (Day {contracts[0].anchorDay || 1}) &bull; Valid until {formatDate(contracts[0].validTo)}
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-500 text-[10px] font-bold font-tech uppercase tracking-wider">
+                    {contracts[0].status}
                   </span>
                 </div>
+              )}
 
-                {/* Quick Action Buttons */}
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    onClick={() => setActiveModal("invoices-modal")}
-                    className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer ${buttonSecondaryClass}`}
-                  >
-                    <span>View Invoices ({invoices.length})</span>
-                    <ArrowRight className="w-3.5 h-3.5 opacity-60" />
-                  </button>
-                  <button
-                    onClick={() => setActiveModal("payments-modal")}
-                    className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer ${buttonSecondaryClass}`}
-                  >
-                    <span>Payment History ({payments.length})</span>
-                    <ArrowRight className="w-3.5 h-3.5 opacity-60" />
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        )}
+              {/* Quick Action Buttons */}
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={() => setActiveModal("invoices-modal")}
+                  className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer ${buttonSecondaryClass}`}
+                >
+                  <span>Invoices ({invoices.length})</span>
+                  <ArrowRight className="w-3.5 h-3.5 opacity-60" />
+                </button>
+                <button
+                  onClick={() => setActiveModal("payments-modal")}
+                  className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer ${buttonSecondaryClass}`}
+                >
+                  <span>Payments ({payments.length})</span>
+                  <ArrowRight className="w-3.5 h-3.5 opacity-60" />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
-        {/* ========================================================================= */}
-        {/* SECTION 2: INVOICE HISTORY / LIST                                         */}
-        {/* ========================================================================= */}
-        {isInvoiceWidget && !isDashboardWidget && (
+      {/* ========================================================================= */}
+      {/* SECTION 2: INVOICE HISTORY / LIST / DETAIL                                */}
+      {/* ========================================================================= */}
+      {isInvoiceWidget && !isDashboardWidget && (
           <div className="space-y-3">
             {invoices.length === 0 && summary.totalBilledMinor === 0 ? (
               <NotConfiguredCard
@@ -1331,34 +1579,71 @@ export function LiveEmbedClient({
             ) : (
               <>
                 {/* Fleet Overview Box */}
-                <div className="p-4 rounded-xl bg-gradient-to-br from-blue-500/10 via-indigo-500/5 to-transparent border border-blue-500/20 flex items-center justify-between text-xs">
-                  <div>
-                    <span className={`text-[10px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>PM2 Managed Fleet</span>
-                    <div className="text-base font-extrabold text-blue-500 mt-0.5 flex items-center gap-1.5 font-steel tracking-tight">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      Active Services ({processes.filter((p) => p.status === "online").length}/{processes.length})
+                {(() => {
+                  const uniqueHosts = Array.from(
+                    new Set(
+                      processes
+                        .map((p) => p.serverName || p.serverHost)
+                        .filter(Boolean)
+                    )
+                  );
+                  const hostLabel =
+                    uniqueHosts.length === 1
+                      ? uniqueHosts[0]
+                      : uniqueHosts.length > 1
+                      ? `${uniqueHosts.length} Nodes`
+                      : `${processes.length} Mapped`;
+                  const onlineCount = processes.filter((p) => p.status === "online").length;
+                  return (
+                    <div className="p-4 rounded-xl bg-gradient-to-br from-blue-500/10 via-indigo-500/5 to-transparent border border-blue-500/20 flex items-center justify-between text-xs">
+                      <div>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>
+                          PM2 Managed Fleet
+                        </span>
+                        <div className="text-base font-extrabold text-blue-500 mt-0.5 flex items-center gap-1.5 font-steel tracking-tight">
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              onlineCount === processes.length
+                                ? "bg-emerald-500 animate-pulse"
+                                : onlineCount > 0
+                                ? "bg-amber-500"
+                                : "bg-rose-500"
+                            }`}
+                          />
+                          Active Services ({onlineCount}/{processes.length})
+                        </div>
+                      </div>
+                      <span className="font-tech text-xs font-semibold px-2.5 py-1 rounded-md bg-blue-500/10 text-blue-500 border border-blue-500/20">
+                        Host: {hostLabel}
+                      </span>
                     </div>
-                  </div>
-                  <span className="font-tech text-xs font-semibold px-2.5 py-1 rounded-md bg-blue-500/10 text-blue-500 border border-blue-500/20">
-                    Host: Linked VM
-                  </span>
-                </div>
+                  );
+                })()}
 
                 {/* Process List */}
                 <div className="space-y-2">
                   {processes.map((proc) => {
                     const isOnline = proc.status === "online";
                     const cooldown = cooldowns[proc.id] || 0;
+                    const cpuVal = proc.cpu ?? proc.cpuPercent;
+                    const memBytes = proc.memory ?? proc.memoryBytes;
+                    const memLabel =
+                      memBytes !== undefined && memBytes !== null && memBytes > 0
+                        ? memBytes >= 1024 * 1024
+                          ? `${(memBytes / (1024 * 1024)).toFixed(0)}MB`
+                          : `${Math.round(memBytes / 1024)}KB`
+                        : "0MB";
+                    const uptimeLabel = formatUptime(proc.uptimeMs);
                     return (
                       <div
                         key={proc.id}
-                        className={`p-3.5 rounded-xl border ${itemBgClass} flex items-center justify-between text-xs`}
+                        className={`p-3.5 rounded-xl border ${itemBgClass} flex items-center justify-between text-xs gap-2`}
                       >
-                        <div className="flex items-center gap-2.5">
-                          <Server className="w-4 h-4 text-blue-500 shrink-0" />
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className={`font-steel font-bold text-xs tracking-tight ${headingTextClass}`}>
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <Server className={`w-4 h-4 shrink-0 ${isOnline ? "text-emerald-500" : "text-rose-500"}`} />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`font-steel font-bold text-xs tracking-tight truncate ${headingTextClass}`}>
                                 {proc.name}
                               </span>
                               <span
@@ -1368,38 +1653,58 @@ export function LiveEmbedClient({
                                     : "bg-rose-500/20 text-rose-500"
                                 }`}
                               >
-                                {proc.status}
+                                {proc.status || "unknown"}
                               </span>
+                              {proc.pm2Id !== undefined && (
+                                <span className={`font-mono text-[10px] ${subtleTextClass}`}>
+                                  #{proc.pm2Id}
+                                </span>
+                              )}
                             </div>
-                            <span className="font-tech text-[11px] text-emerald-500 font-semibold tabular-nums">
-                              CPU {proc.cpuPercent || 1.1}% &bull; RAM{" "}
-                              {proc.memoryBytes
-                                ? `${Math.round(proc.memoryBytes / (1024 * 1024))}MB`
-                                : "128MB"}
-                            </span>
+                            <div className="font-tech text-[11px] text-emerald-500 font-semibold tabular-nums flex items-center gap-1.5 flex-wrap mt-0.5">
+                              <span>CPU {cpuVal !== undefined && cpuVal !== null ? `${cpuVal}%` : "0%"}</span>
+                              <span>&bull;</span>
+                              <span>RAM {memLabel}</span>
+                              {uptimeLabel && (
+                                <>
+                                  <span>&bull;</span>
+                                  <span className={subtleTextClass}>Up {uptimeLabel}</span>
+                                </>
+                              )}
+                              {typeof proc.restarts === "number" && proc.restarts > 0 && (
+                                <>
+                                  <span>&bull;</span>
+                                  <span className={subtleTextClass}>{proc.restarts} restarts</span>
+                                </>
+                              )}
+                            </div>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleRestartProcess(proc.id, proc.name)}
-                            disabled={restartingId === proc.id || cooldown > 0}
-                            className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold font-steel text-[11px] inline-flex items-center gap-1 transition cursor-pointer"
-                          >
-                            {restartingId === proc.id ? (
-                              <IosSpinner size="xs" className="text-white" />
-                            ) : (
-                              <RotateCw className="w-3 h-3" />
-                            )}
-                            <span>{cooldown > 0 ? `${cooldown}s` : "Restart"}</span>
-                          </button>
-                          <button
-                            onClick={() => handleViewLogs(proc)}
-                            className={`px-2.5 py-1 rounded-lg border font-semibold text-[11px] inline-flex items-center gap-1 transition cursor-pointer ${buttonSecondaryClass}`}
-                          >
-                            <Terminal className="w-3 h-3 text-zinc-400" />
-                            <span>Logs</span>
-                          </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {proc.allowClientRestart !== false && (
+                            <button
+                              onClick={() => handleRestartProcess(proc.id, proc.name)}
+                              disabled={restartingId === proc.id || cooldown > 0}
+                              className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold font-steel text-[11px] inline-flex items-center gap-1 transition cursor-pointer"
+                            >
+                              {restartingId === proc.id ? (
+                                <IosSpinner size="xs" className="text-white" />
+                              ) : (
+                                <RotateCw className="w-3 h-3" />
+                              )}
+                              <span>{cooldown > 0 ? `${cooldown}s` : "Restart"}</span>
+                            </button>
+                          )}
+                          {proc.allowClientLogs !== false && (
+                            <button
+                              onClick={() => handleViewLogs(proc)}
+                              className={`px-2.5 py-1 rounded-lg border font-semibold text-[11px] inline-flex items-center gap-1 transition cursor-pointer ${buttonSecondaryClass}`}
+                            >
+                              <Terminal className="w-3 h-3 text-zinc-400" />
+                              <span>Logs</span>
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -1463,41 +1768,81 @@ export function LiveEmbedClient({
                 {domains.map((dom, domIdx) => {
                   const domId = dom.id || dom.props?.id || `dom-${domIdx}`;
                   const hostname = dom.hostname || dom.props?.hostname || "Registered Domain";
-                  const status = dom.status || dom.props?.status || "up";
+                  const status = dom.status || dom.props?.status || "unknown";
                   const isUp = status === "up";
-                  const httpStatus = dom.lastHttpStatus ?? dom.props?.lastHttpStatus ?? dom.lastStatusCode ?? 200;
-                  const sslDays = dom.sslDaysRemaining ?? dom.props?.sslDaysRemaining;
-                  const sslStatus = dom.sslStatus || dom.props?.sslStatus || (sslDays ? "valid" : "Active");
-                  const dnsStatus = dom.dnsStatus || dom.props?.dnsStatus || "healthy";
+                  const isDown = status === "down";
+                  const isDegraded = status === "degraded";
+                  const httpStatus = dom.lastHttpStatus ?? dom.props?.lastHttpStatus ?? dom.lastStatusCode ?? null;
+                  const latencyMs = dom.lastLatencyMs ?? dom.props?.lastLatencyMs ?? null;
+                  const sslDays = dom.sslDaysRemaining ?? dom.props?.sslDaysRemaining ?? null;
+                  const sslStatus = dom.sslStatus || dom.props?.sslStatus || "unknown";
+                  const sslIssuer = dom.sslIssuer ?? dom.props?.sslIssuer ?? null;
+                  const dnsStatus = dom.dnsStatus || dom.props?.dnsStatus || "unknown";
+                  const resolvedIp = dom.resolvedIp ?? dom.props?.resolvedIp ?? null;
+                  const openIncidentsCount = dom.openIncidentsCount ?? 0;
                   const isChecking = checkingDomainId === domId;
+
+                  const statusLabel = isUp
+                    ? latencyMs !== null
+                      ? `Operational (${latencyMs}ms)`
+                      : "Operational"
+                    : isDegraded
+                    ? "Degraded Performance"
+                    : isDown
+                    ? "Service Unreachable"
+                    : "Pending Probe";
+
+                  const badgeLabel =
+                    httpStatus !== null
+                      ? isUp
+                        ? `HTTP ${httpStatus} OK`
+                        : `HTTP ${httpStatus}`
+                      : isUp
+                      ? "Reachable"
+                      : isDown
+                      ? "Unreachable"
+                      : "Awaiting Check";
 
                   return (
                     <div key={domId} className="space-y-2.5">
-                      {/* Availability Box with real domain info */}
-                      <div className="p-4 rounded-xl bg-gradient-to-br from-blue-500/10 via-indigo-500/5 to-transparent border border-blue-500/20 flex items-center justify-between">
+                      {/* Availability Box with real domain telemetry */}
+                      <div className="p-4 rounded-xl bg-gradient-to-br from-blue-500/10 via-indigo-500/5 to-transparent border border-blue-500/20 flex items-center justify-between gap-2">
                         <div>
-                          <span className={`text-sm font-bold font-steel tracking-tight ${headingTextClass}`}>
-                            {hostname}
-                          </span>
-                          <div className="text-2xl sm:text-3xl font-black font-steel tracking-tight text-blue-500 mt-0.5">
-                            {isUp ? "99.98% Operational" : "Active Checks"}
+                          <div className="flex items-center gap-2">
+                            <span className={`text-sm font-bold font-steel tracking-tight ${headingTextClass}`}>
+                              {hostname}
+                            </span>
+                            {openIncidentsCount > 0 && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-500">
+                                {openIncidentsCount} Incident{openIncidentsCount > 1 ? "s" : ""}
+                              </span>
+                            )}
+                          </div>
+                          <div
+                            className={`text-xl sm:text-2xl font-black font-steel tracking-tight mt-0.5 ${
+                              isUp ? "text-emerald-500" : isDown ? "text-rose-500" : "text-blue-500"
+                            }`}
+                          >
+                            {statusLabel}
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0">
                           <span
                             className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider font-tech ${
                               isUp
                                 ? "bg-emerald-500/15 text-emerald-500 border border-emerald-500/30"
-                                : "bg-rose-500/15 text-rose-500 border border-rose-500/30"
+                                : isDown
+                                ? "bg-rose-500/15 text-rose-500 border border-rose-500/30"
+                                : "bg-amber-500/15 text-amber-500 border border-amber-500/30"
                             }`}
                           >
-                            {isUp ? "Healthy (200 OK)" : "Active"}
+                            {badgeLabel}
                           </span>
                           <button
                             onClick={() => handleCheckDomain(domId, hostname)}
                             disabled={isChecking}
                             className={`p-1.5 rounded-lg border transition cursor-pointer ${buttonSecondaryClass}`}
-                            title="Live Synthetic Re-check"
+                            title="Run Live Synthetic Probe"
                           >
                             {isChecking ? (
                               <IosSpinner size="xs" className="text-current" />
@@ -1511,25 +1856,65 @@ export function LiveEmbedClient({
                       {/* Real 3-Column Metrics Grid */}
                       <div className="grid grid-cols-3 gap-2.5 text-center text-xs">
                         <div className={`p-3 rounded-xl border ${itemBgClass}`}>
-                          <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>HTTP</p>
-                          <p className="font-tech font-extrabold text-sm text-emerald-500 mt-0.5 tracking-tight tabular-nums">
-                            {httpStatus ? `${httpStatus} OK` : "200 OK"}
+                          <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>
+                            HTTP Probe
+                          </p>
+                          <p
+                            className={`font-tech font-extrabold text-sm mt-0.5 tracking-tight tabular-nums ${
+                              isUp ? "text-emerald-500" : isDown ? "text-rose-500" : headingTextClass
+                            }`}
+                          >
+                            {httpStatus !== null
+                              ? `${httpStatus}${latencyMs !== null ? ` · ${latencyMs}ms` : ""}`
+                              : isUp
+                              ? "Up"
+                              : status.toUpperCase()}
                           </p>
                         </div>
                         <div className={`p-3 rounded-xl border ${itemBgClass}`}>
-                          <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>SSL</p>
-                          <p className="font-tech font-extrabold text-sm text-emerald-500 mt-0.5 tracking-tight tabular-nums">
-                            {sslDays !== undefined && sslDays !== null
-                              ? `Valid (${sslDays}d)`
+                          <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>
+                            SSL Certificate
+                          </p>
+                          <p
+                            className={`font-tech font-extrabold text-sm mt-0.5 tracking-tight tabular-nums ${
+                              sslStatus === "expired" || sslStatus === "invalid"
+                                ? "text-rose-500"
+                                : sslStatus === "expiring_soon"
+                                ? "text-amber-500"
+                                : "text-emerald-500"
+                            }`}
+                            title={sslIssuer ? `Issuer: ${sslIssuer}` : undefined}
+                          >
+                            {sslDays !== null
+                              ? `${sslDays}d left`
                               : sslStatus === "valid"
-                              ? "Active"
-                              : sslStatus || "Active"}
+                              ? "Valid"
+                              : sslStatus === "unknown"
+                              ? "Unchecked"
+                              : sslStatus}
                           </p>
                         </div>
                         <div className={`p-3 rounded-xl border ${itemBgClass}`}>
-                          <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>DNS</p>
-                          <p className="font-tech font-extrabold text-sm text-emerald-500 mt-0.5 tracking-tight tabular-nums">
-                            {dnsStatus === "drift_detected" ? "Drift" : dnsStatus === "resolution_failed" ? "Failed" : "Synced"}
+                          <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>
+                            DNS Status
+                          </p>
+                          <p
+                            className={`font-tech font-extrabold text-sm mt-0.5 tracking-tight tabular-nums truncate ${
+                              dnsStatus === "drift_detected" || dnsStatus === "resolution_failed"
+                                ? "text-rose-500"
+                                : "text-emerald-500"
+                            }`}
+                            title={resolvedIp || undefined}
+                          >
+                            {dnsStatus === "drift_detected"
+                              ? "Drift"
+                              : dnsStatus === "resolution_failed"
+                              ? "Failed"
+                              : resolvedIp
+                              ? resolvedIp
+                              : dnsStatus === "healthy"
+                              ? "Resolved"
+                              : "Pending"}
                           </p>
                         </div>
                       </div>
@@ -1546,22 +1931,49 @@ export function LiveEmbedClient({
         {/* ========================================================================= */}
         {(isTicketWidget || (isDashboardWidget && dashboardTab === "support")) && (
           <div className="space-y-3">
-            {/* Coverage Box */}
-            <div className="p-4 rounded-xl bg-gradient-to-br from-blue-500/10 via-indigo-500/5 to-transparent border border-blue-500/20 flex items-center justify-between text-xs">
-              <div>
-                <span className={subtleTextClass}>Support Coverage</span>
-                <div className="text-base font-bold text-blue-500 mt-0.5">24×7 Active SLA</div>
-              </div>
-              <span className="font-semibold text-xs px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-500 border border-blue-500/20">
-                Median Response: &lt;15m
-              </span>
-            </div>
+            {/* Real Support Ticket Metrics Box */}
+            {(() => {
+              const openCount = tickets.filter(
+                (t) => t.status !== "resolved" && t.status !== "closed"
+              ).length;
+              const resolvedCount = tickets.filter(
+                (t) => t.status === "resolved" || t.status === "closed"
+              ).length;
+              const breachedCount = tickets.filter(
+                (t) => t.slaBreached && t.status !== "resolved" && t.status !== "closed"
+              ).length;
+              return (
+                <div className="p-4 rounded-xl bg-gradient-to-br from-blue-500/10 via-indigo-500/5 to-transparent border border-blue-500/20 flex items-center justify-between text-xs">
+                  <div>
+                    <span className={subtleTextClass}>Support Desk &amp; SLA</span>
+                    <div className="text-base font-bold text-blue-500 mt-0.5">
+                      {openCount > 0
+                        ? `${openCount} Active Ticket${openCount > 1 ? "s" : ""}`
+                        : "All Tickets Resolved"}
+                    </div>
+                  </div>
+                  <span
+                    className={`font-semibold text-xs px-2.5 py-1 rounded-lg border ${
+                      breachedCount > 0
+                        ? "bg-rose-500/10 text-rose-500 border-rose-500/20"
+                        : "bg-blue-500/10 text-blue-500 border-blue-500/20"
+                    }`}
+                  >
+                    {breachedCount > 0
+                      ? `${breachedCount} SLA Escalated`
+                      : `${tickets.length} Total (${resolvedCount} Closed)`}
+                  </span>
+                </div>
+              );
+            })()}
 
             {/* Action Row */}
             <div className={`p-3.5 rounded-xl border ${itemBgClass} flex items-center justify-between text-xs`}>
               <div>
                 <p className={`font-semibold ${headingTextClass}`}>Need Assistance?</p>
-                <p className={`text-[11px] mt-0.5 ${subtleTextClass}`}>Priority response under contractual terms</p>
+                <p className={`text-[11px] mt-0.5 ${subtleTextClass}`}>
+                  Open a support ticket with automatic SLA tracking
+                </p>
               </div>
               <button
                 onClick={() => setActiveModal("new-ticket")}
@@ -1572,32 +1984,42 @@ export function LiveEmbedClient({
               </button>
             </div>
 
-            {/* Existing Active Tickets List */}
+            {/* Existing Tickets List */}
             {tickets.length > 0 ? (
               <div className="space-y-2 pt-1">
-                <span className={`text-[11px] font-bold uppercase ${subtleTextClass}`}>Recent Tickets</span>
-                {tickets.slice(0, 3).map((t) => (
+                <span className={`text-[11px] font-bold uppercase ${subtleTextClass}`}>
+                  Support Threads ({tickets.length})
+                </span>
+                {tickets.slice(0, widget === "ticket-list" ? 8 : 4).map((t) => (
                   <div
                     key={t.id}
                     onClick={() => {
                       setSelectedTicket(t);
                       setActiveModal("ticket-thread");
                     }}
-                    className={`p-3 rounded-xl border ${itemBgClass} flex items-center justify-between text-xs cursor-pointer hover:border-blue-500/50 transition`}
+                    className={`p-3 rounded-xl border ${itemBgClass} flex items-center justify-between text-xs cursor-pointer hover:border-blue-500/50 transition gap-2`}
                   >
-                    <div>
-                      <span className={`font-semibold ${headingTextClass}`}>{t.subject}</span>
-                      <p className={`text-[10px] ${subtleTextClass}`}>
-                        Priority: {t.priority} &bull; Status: {t.status}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        {t.ticketNumber && (
+                          <span className={`font-mono text-[10px] ${subtleTextClass}`}>
+                            #{t.ticketNumber}
+                          </span>
+                        )}
+                        <span className={`font-semibold truncate ${headingTextClass}`}>{t.subject}</span>
+                      </div>
+                      <p className={`text-[10px] ${subtleTextClass} mt-0.5`}>
+                        Priority: {String(t.priority).toUpperCase()} &bull; Status: {t.status}
+                        {t.escalationLevel ? ` • L${t.escalationLevel}` : ""}
                       </p>
                     </div>
-                    <span className="text-blue-500 font-bold text-[11px]">View Thread &rarr;</span>
+                    <span className="text-blue-500 font-bold text-[11px] shrink-0">View Thread &rarr;</span>
                   </div>
                 ))}
               </div>
             ) : (
               <div className={`p-4 rounded-xl border ${itemBgClass} text-center space-y-1`}>
-                <p className={`text-xs font-semibold ${headingTextClass}`}>No Open Support Tickets</p>
+                <p className={`text-xs font-semibold ${headingTextClass}`}>No Support Tickets Raised</p>
                 <p className={`text-[11px] ${subtleTextClass}`}>
                   All systems are running smoothly. If you require technical support or configuration changes, click New Ticket.
                 </p>
@@ -1659,7 +2081,9 @@ export function LiveEmbedClient({
                 <div className="p-4 rounded-xl bg-gradient-to-br from-blue-500/10 via-indigo-500/5 to-transparent border border-blue-500/20 flex items-center justify-between text-xs">
                   <div>
                     <span className={subtleTextClass}>Encrypted Vault</span>
-                    <div className="text-base font-bold text-blue-500 mt-0.5">AES-256-GCM Secure</div>
+                    <div className="text-base font-bold text-blue-500 mt-0.5">
+                      AES-256-GCM ({credentials.length} Secret{credentials.length > 1 ? "s" : ""})
+                    </div>
                   </div>
                   <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20">
                     Audited
@@ -1782,7 +2206,7 @@ export function LiveEmbedClient({
                         </span>
                       </div>
                       <p className={`text-[11px] ${subtleTextClass} mt-0.5`}>
-                        {rel.notes || "Standard software deployment release"}
+                        {rel.notes || "Software deployment release"}
                       </p>
                     </div>
                     {rel.url && (
@@ -1886,7 +2310,9 @@ export function LiveEmbedClient({
                       isDark ? "bg-black/80 border-zinc-800 text-zinc-300" : "bg-white border-zinc-200 text-zinc-800"
                     }`}
                   >
-                    {`<script defer src="https://rsl.alaqmar.dev/t.js" data-client="${clientId}"></script>`}
+                    {`<script defer src="${
+                      mounted && typeof window !== "undefined" ? window.location.origin : "https://rsl.alaqmar.dev"
+                    }/t.js" data-client="${clientId}"></script>`}
                   </pre>
                 </div>
               </div>
@@ -1931,8 +2357,12 @@ export function LiveEmbedClient({
                   </div>
                 </div>
 
-                {/* Traffic Trend Mini Chart (for analytics-overview & analytics-chart) */}
-                {(widget === "analytics-overview" || widget === "analytics-chart" || widget.includes("analytics")) &&
+                {/* Traffic Trend Mini Chart (for analytics-overview, pageview-chart, traffic-chart, analytics-chart) */}
+                {(widget === "analytics-overview" ||
+                  widget === "analytics-chart" ||
+                  widget === "pageview-chart" ||
+                  widget === "traffic-chart" ||
+                  widget.includes("analytics")) &&
                   analytics.timeseries &&
                   analytics.timeseries.length > 0 && (
                     <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2`}>
@@ -1974,7 +2404,11 @@ export function LiveEmbedClient({
                   )}
 
                 {/* Top Routes & Origins ("From Where") */}
-                {(widget === "analytics-overview" || widget === "top-pages" || widget.includes("analytics")) && (
+                {(widget === "analytics-overview" ||
+                  widget === "top-pages" ||
+                  widget === "pageview-chart" ||
+                  widget === "traffic-chart" ||
+                  widget.includes("analytics")) && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2`}>
                       <p className={`text-[11px] font-bold uppercase tracking-wider ${subtleTextClass}`}>
@@ -2049,7 +2483,7 @@ export function LiveEmbedClient({
                   )}
 
                 {/* Recent Visitor Journeys */}
-                {widget === "analytics-overview" &&
+                {(widget === "analytics-overview" || widget === "visitor-journeys") &&
                   analytics.visitorSessions &&
                   analytics.visitorSessions.length > 0 && (
                     <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2`}>
@@ -2764,7 +3198,6 @@ export function LiveEmbedClient({
           </div>
         )}
       </div>
-    </div>
   );
 }
 

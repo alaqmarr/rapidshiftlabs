@@ -202,12 +202,24 @@ export function EmbedStudio({
     };
   }, [selectedClientId, selectedWidgetName]);
 
+  const [previewHeight, setPreviewHeight] = useState<number>(360);
+
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      if (e.data && e.data.type === "rsl-embed-resize" && typeof e.data.height === "number") {
+        setPreviewHeight(Math.max(120, Math.ceil(e.data.height)));
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
   const origin = getSiteOrigin();
   const displayApiKey = universalApiKey || "rpk_live_YOUR_UNIVERSAL_API_KEY";
 
   const webComponentSnippet =
     authMode === "apikey"
-      ? `<!-- 1. RapidShift Embed Engine (Include once in <head> or <body> — works for all 23 widgets) -->
+      ? `<!-- 1. RapidShift Embed Engine (Include once in <head> or <body> — works for all widgets) -->
 <script defer src="${origin}/embed.js" data-api-key="${displayApiKey}"></script>
 
 <!-- 2. ${selectedWidget?.title || "Embed Widget"} (Permanent API Key — No Token Minting Needed) -->
@@ -226,22 +238,22 @@ export function EmbedStudio({
 
   const iframeSnippet =
     authMode === "apikey"
-      ? `<!-- RapidShift Embed: ${selectedWidget?.title || "Widget"} (Permanent API Key — Zero JS Dependency) -->
+      ? `<!-- RapidShift Embed: ${selectedWidget?.title || "Widget"} (Card-Only Iframe) -->
 <iframe
   src="${origin}/embed/${selectedWidget?.name}?apiKey=${displayApiKey}&theme=${theme}"
   width="100%"
-  height="450"
   frameborder="0"
-  style="border-radius: 12px; border: 1px solid #e4e4e7; width: 100%; min-height: 400px;"
+  allowtransparency="true"
+  style="border: none; width: 100%; background: transparent; display: block; min-height: 260px;"
   loading="lazy"
 ></iframe>`
-      : `<!-- RapidShift Embed: ${selectedWidget?.title || "Widget"} (15-Minute Scoped Token) -->
+      : `<!-- RapidShift Embed: ${selectedWidget?.title || "Widget"} (Card-Only Iframe) -->
 <iframe
   src="${origin}/embed/${selectedWidget?.name}?clientId=${selectedClientId}&theme=${theme}${activeToken ? `&token=${activeToken}` : ""}"
   width="100%"
-  height="450"
   frameborder="0"
-  style="border-radius: 12px; border: 1px solid #e4e4e7; width: 100%; min-height: 400px;"
+  allowtransparency="true"
+  style="border: none; width: 100%; background: transparent; display: block; min-height: 260px;"
   loading="lazy"
 ></iframe>`;
 
@@ -569,11 +581,12 @@ console.log("Client Data:", data);`;
                 <span className="font-mono text-[11px] truncate max-w-[360px]">{previewUrl}</span>
               </div>
 
-              {/* Iframe Preview Container */}
-              <div className="rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 min-h-[460px] flex items-stretch">
+              {/* Iframe Preview Container (Card-only, dynamic height) */}
+              <div className="w-full">
                 <iframe
                   src={previewUrl}
-                  className="w-full min-h-[460px] border-0"
+                  style={{ height: `${previewHeight}px` }}
+                  className="w-full border-0 bg-transparent block transition-[height] duration-150"
                   title={`Preview of ${selectedWidget?.title}`}
                 />
               </div>

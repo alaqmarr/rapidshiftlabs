@@ -526,12 +526,12 @@ const { data } = await res.json();`;
               </div>
             </div>
 
-            {/* Embedded iFrame Frame */}
-            <div className="p-4 bg-zinc-100 dark:bg-zinc-950 flex items-center justify-center min-h-[440px]">
+            {/* Embedded iFrame Frame (Card-only) */}
+            <div className="p-4">
               <iframe
                 key={previewKey}
                 src={previewUrl}
-                className="w-full h-[400px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm transition"
+                className="w-full min-h-[380px] border-0 bg-transparent block transition"
                 title={selectedWidget.title}
               />
             </div>

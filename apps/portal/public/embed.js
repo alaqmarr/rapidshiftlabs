@@ -25,6 +25,7 @@
     "billing-summary",
     "next-due-countdown",
     "invoice-list",
+    "invoice-history",
     "invoice-detail",
     "payment-history",
     "contract-card",
@@ -42,6 +43,9 @@
     "vault-secret",
     "analytics-overview",
     "analytics-chart",
+    "pageview-chart",
+    "traffic-chart",
+    "visitor-journeys",
     "top-pages",
     "web-vitals",
     "releases-list",
@@ -163,7 +167,7 @@
 
       var theme = this.getAttribute("theme") || "dark";
       var accent = this.getAttribute("accent") || "#2563eb";
-      var minHeight = this.getAttribute("height") || "380px";
+      var explicitHeight = this.getAttribute("height") || "";
       var endpoint = (
         this.getAttribute("endpoint") ||
         this.getAttribute("data-endpoint") ||
@@ -172,9 +176,6 @@
       ).replace(/\/+$/, "");
 
       var isDark = theme !== "light";
-      var bg = isDark ? "#09090b" : "#ffffff";
-      var text = isDark ? "#f4f4f5" : "#09090b";
-      var border = isDark ? "#27272a" : "#e4e4e7";
 
       var params = new URLSearchParams();
       if (apiKey) params.set("apiKey", apiKey);
@@ -185,29 +186,22 @@
 
       var src = endpoint + "/embed/" + encodeURIComponent(widgetName) + "?" + params.toString();
 
+      // Card-only rendering: no extra wrapper div around the iframe.
+      // The iframe itself renders the self-contained card and reports its exact height via postMessage.
       this.shadow.innerHTML =
         "<style>" +
-        ":host{display:block;width:100%;font-family:system-ui,-apple-system,sans-serif;color-scheme:" +
+        ":host{display:block;width:100%;margin:0;padding:0;font-family:system-ui,-apple-system,sans-serif;color-scheme:" +
         (isDark ? "dark" : "light") +
         ";}" +
-        ".rsl-card{background:" +
-        bg +
-        ";color:" +
-        text +
-        ";border:1px solid " +
-        border +
-        ";border-radius:16px;overflow:hidden;box-shadow:0 4px 12px -2px rgba(0,0,0,0.12);width:100%;position:relative;}" +
-        "iframe{width:100%;min-height:" +
-        minHeight +
-        ";border:none;display:block;transition:height 0.15s ease;}" +
+        "iframe{width:100%;height:" +
+        (explicitHeight || "220px") +
+        ";border:none;border-radius:16px;background:transparent;display:block;overflow:hidden;transition:height 0.12s ease-out;}" +
         "</style>" +
-        '<div class="rsl-card">' +
         '<iframe src="' +
         src +
         '" title="RapidShift ' +
         widgetName +
-        '" loading="lazy" allow="clipboard-write" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"></iframe>' +
-        "</div>";
+        '" allowtransparency="true" loading="lazy" scrolling="no" allow="clipboard-write" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"></iframe>';
 
       this.iframeEl = this.shadow.querySelector("iframe");
     };
@@ -216,7 +210,7 @@
   })(HTMLElement);
 
   // 1. Register universal <rsl-embed widget="..."> and <rapidshift-widget widget="...">
-  var universalTags = ["rsl-embed", "rapidshift-widget"];
+  var universalTags = ["rsl-embed", "rapidshift-widget", "rsl-widget"];
   for (var u = 0; u < universalTags.length; u++) {
     (function (tagName) {
       if (!customElements.get(tagName)) {
@@ -248,8 +242,8 @@
   // 3. Auto-resize listener from embedded iframe postMessage
   window.addEventListener("message", function (event) {
     if (!event || !event.data || event.data.type !== "rsl-embed-resize") return;
-    var newHeight = Number(event.data.height);
-    if (!newHeight || newHeight < 120) return;
+    var newHeight = Math.ceil(Number(event.data.height));
+    if (!newHeight || newHeight < 60) return;
 
     var allCustomTags = universalTags.concat(
       WIDGETS.map(function (w) {
