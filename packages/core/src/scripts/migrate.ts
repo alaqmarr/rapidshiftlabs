@@ -72,13 +72,19 @@ const STATEMENTS = [
     payload text NOT NULL,
     occurred_at integer NOT NULL,
     status text DEFAULT 'pending' NOT NULL,
-    retry_count integer DEFAULT 0 NOT NULL,
-    last_error text,
-    locked_until integer,
+    attempts integer DEFAULT 0 NOT NULL,
+    max_attempts integer DEFAULT 5 NOT NULL,
+    next_retry_at integer,
+    locked_at integer,
     locked_by text,
     processed_at integer,
-    created_at integer NOT NULL
+    last_error text,
+    created_at integer NOT NULL,
+    updated_at integer NOT NULL
   );`,
+  `CREATE INDEX IF NOT EXISTS idx_outbox_poll ON outbox (status, next_retry_at, occurred_at);`,
+  `CREATE INDEX IF NOT EXISTS idx_outbox_aggregate ON outbox (aggregate_type, aggregate_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_outbox_client ON outbox (client_id, occurred_at);`,
 
   `CREATE TABLE IF NOT EXISTS audit_log (
     id text PRIMARY KEY NOT NULL,
@@ -722,6 +728,24 @@ export async function migrateCoreSchema(): Promise<void> {
     const existingAdminCols = new Set(adminCols.rows.map((r: any) => String(r.name || r[1])));
     if (!existingAdminCols.has("status")) {
       await client.execute("ALTER TABLE admin_users ADD COLUMN status text DEFAULT 'active' NOT NULL");
+    }
+
+    const outboxCols = await client.execute("PRAGMA table_info(outbox)");
+    const existingOutboxCols = new Set(outboxCols.rows.map((r: any) => String(r.name || r[1])));
+    if (!existingOutboxCols.has("attempts")) {
+      await client.execute("ALTER TABLE outbox ADD COLUMN attempts integer DEFAULT 0 NOT NULL");
+    }
+    if (!existingOutboxCols.has("max_attempts")) {
+      await client.execute("ALTER TABLE outbox ADD COLUMN max_attempts integer DEFAULT 5 NOT NULL");
+    }
+    if (!existingOutboxCols.has("next_retry_at")) {
+      await client.execute("ALTER TABLE outbox ADD COLUMN next_retry_at integer");
+    }
+    if (!existingOutboxCols.has("locked_at")) {
+      await client.execute("ALTER TABLE outbox ADD COLUMN locked_at integer");
+    }
+    if (!existingOutboxCols.has("updated_at")) {
+      await client.execute("ALTER TABLE outbox ADD COLUMN updated_at integer DEFAULT 0 NOT NULL");
     }
   } catch {
     // ignore
