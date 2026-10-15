@@ -6,7 +6,8 @@ import type { EncryptionService } from "../../domain/ports/encryption-service.po
 import { FleetCommandSanitizer } from "../services/fleet-command-sanitizer";
 import { ServerStatsParser, type ParsedServerStats } from "../services/server-stats-parser";
 import type { ServerStatsDTO } from "../dtos/server.dto";
-import { uow, serverMetrics } from "../../../../shared/infrastructure/db";
+import { uow, serverMetrics, getDb } from "../../../../shared/infrastructure/db";
+import { desc, eq } from "drizzle-orm";
 import { newId } from "../../../../shared/kernel/id";
 
 export class GetServerStatsUseCase {
@@ -91,6 +92,24 @@ Filesystem     1K-blocks     Used Available Use% Mounted on
       `);
     }
 
+    let recentMetrics: Array<{ cpuPercent: number; memoryUsedMb: number; timestamp: number }> = [];
+    try {
+      const metricsDb = getDb("metrics");
+      const rows = await metricsDb
+        .select({
+          cpuPercent: serverMetrics.cpuPercent,
+          memoryUsedMb: serverMetrics.memoryUsedMb,
+          timestamp: serverMetrics.timestamp,
+        })
+        .from(serverMetrics)
+        .where(eq(serverMetrics.serverId, server.id))
+        .orderBy(desc(serverMetrics.timestamp))
+        .limit(24);
+      recentMetrics = rows.reverse();
+    } catch {
+      // Ignore if metrics table not ready
+    }
+
     return {
       serverId: server.id,
       serverName: server.name,
@@ -131,8 +150,9 @@ Filesystem     1K-blocks     Used Available Use% Mounted on
       pm2OnlineCount,
       pm2TotalMemoryMb,
       pm2TotalCpuPercent: Number(pm2TotalCpuPercent.toFixed(1)),
-      // Timestamp
+      // Timestamp & History
       collectedAt: Date.now(),
+      recentMetrics,
     };
   }
 }

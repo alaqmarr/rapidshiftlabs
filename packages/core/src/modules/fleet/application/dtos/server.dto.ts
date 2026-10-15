@@ -66,4 +66,10 @@ export interface ServerStatsDTO {
   pm2TotalCpuPercent: number;
   // Metadata
   collectedAt: number;
+  recentMetrics?: Array<{
+    cpuPercent: number;
+    memoryUsedMb: number;
+    timestamp: number;
+  }>;
 }
+
