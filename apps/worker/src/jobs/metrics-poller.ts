@@ -106,7 +106,7 @@ export class MetricsPollerJob {
   start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
-    const interval = this.options.pollIntervalMs ?? 30_000;
+    const interval = this.options.pollIntervalMs ?? 60_000;
     console.log(
       `[MetricsPollerJob] Started metrics poller daemon (interval: ${interval}ms)`,
     );
@@ -156,7 +156,7 @@ export class MetricsPollerJob {
     } catch (err) {
       console.error("[MetricsPollerJob] Error during polling cycle:", err);
     } finally {
-      this.scheduleNext(this.options.pollIntervalMs ?? 30_000);
+      this.scheduleNext(this.options.pollIntervalMs ?? 60_000);
     }
   }
 

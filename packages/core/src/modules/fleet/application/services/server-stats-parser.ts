@@ -181,8 +181,15 @@ export class ServerStatsParser {
     if (!kernelVersion) kernelVersion = "Linux Kernel 6.8+";
     if (!architecture) architecture = "x86_64";
 
-    // Normalized CPU % based on cores
-    const cpuUsagePercent = Math.min(100, Math.max(0, Math.round((load1 / Math.max(1, cpuCores)) * 100)));
+    // Normalized CPU % based on cores; dampen decaying 1m load spikes when only the probe thread (<=1) is active
+    const effectiveLoad =
+      activeThreads <= 1 && load1 > load5 && load5 >= 0
+        ? load1 * 0.35 + load5 * 0.65
+        : load1;
+    const cpuUsagePercent = Math.min(
+      100,
+      Math.max(0, Math.round((effectiveLoad / Math.max(1, cpuCores)) * 100))
+    );
 
     return {
       cpuUsagePercent,

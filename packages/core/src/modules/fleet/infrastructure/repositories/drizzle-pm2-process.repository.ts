@@ -118,22 +118,33 @@ export class DrizzlePm2ProcessRepository implements Pm2ProcessRepository {
         .from(pm2Processes)
         .where(eq(pm2Processes.serverId, serverId));
 
-      const existingMap = new Map<number, Pm2ProcessRow>();
-      for (const row of existingRows) {
-        existingMap.set(row.pm2Id, row);
-      }
+      const matchedExistingIds = new Set<string>();
+      const discoveredPm2Ids = new Set(discovered.map((d) => d.pm2Id));
 
       const now = Date.now();
       const synced: Pm2Process[] = [];
 
       for (const item of discovered) {
-        const existing = existingMap.get(item.pm2Id);
+        // 1. Prefer exact pm2Id match; 2. Fallback to same process name if its old pm2Id is no longer present
+        let existing = existingRows.find(
+          (row) => row.pm2Id === item.pm2Id && !matchedExistingIds.has(row.id)
+        );
+        if (!existing) {
+          existing = existingRows.find(
+            (row) =>
+              row.name === item.name &&
+              !matchedExistingIds.has(row.id) &&
+              !discoveredPm2Ids.has(row.pm2Id)
+          );
+        }
 
         if (existing) {
-          // Update runtime data, PRESERVING clientId, allowClientRestart, restartCooldownSec
+          matchedExistingIds.add(existing.id);
+          // Update runtime data (including pm2Id if reassigned), PRESERVING clientId, allowClientRestart, restartCooldownSec
           await tx
             .update(pm2Processes)
             .set({
+              pm2Id: item.pm2Id,
               name: item.name,
               status: item.status as any,
               cpu: item.cpu,
@@ -204,6 +215,13 @@ export class DrizzlePm2ProcessRepository implements Pm2ProcessRepository {
               updatedAt: new Date(now),
             })
           );
+        }
+      }
+
+      // Prune stale/ghost processes that no longer exist in PM2 on this server
+      for (const row of existingRows) {
+        if (!matchedExistingIds.has(row.id)) {
+          await tx.delete(pm2Processes).where(eq(pm2Processes.id, row.id));
         }
       }
 
