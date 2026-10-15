@@ -3,19 +3,63 @@ import path from "node:path";
 import React from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { BookOpen, ArrowLeft, ArrowRight } from "lucide-react";
+import { BookOpen, ArrowLeft, ArrowRight, Key, Code2 } from "lucide-react";
+import { DocsHeader } from "../docs-header";
+import { DocsMarkdownViewer } from "../docs-markdown-viewer";
 
 interface DocsPageProps {
   params: Promise<{ slug: string }>;
 }
 
-const AVAILABLE_SLUGS: Record<string, { title: string; category: string }> = {
-  "gate-integration": { title: "Client Access Gate Integration", category: "Integration" },
-  "analytics-tracker": { title: "Cookieless Analytics & Offload", category: "Analytics" },
-  embeds: { title: "Embeddable Widgets & Web Components", category: "Embeds" },
-  webhooks: { title: "Webhooks & Event Delivery", category: "Automation" },
-  "sdk-reference": { title: "TypeScript SDK Reference (@rapidshift/sdk)", category: "SDK" },
-  "architecture-ddd": { title: "Architecture & Domain-Driven Design", category: "Architecture" },
+const GUIDE_ORDER = [
+  "embeds",
+  "analytics-tracker",
+  "gate-integration",
+  "sdk-reference",
+  "webhooks",
+  "architecture-ddd",
+] as const;
+
+const AVAILABLE_SLUGS: Record<
+  string,
+  { title: string; category: string; summary: string }
+> = {
+  embeds: {
+    title: "Embeddable Widgets, Web Components & Client Data API",
+    category: "Embeds & UI",
+    summary:
+      "Use one permanent Universal API Key (rpk_live_...) across all 23 Web Components, Iframes, and GET /api/v1/client/data without minting tokens each time.",
+  },
+  "analytics-tracker": {
+    title: "Cookieless Analytics Tracker & Visitor Intelligence",
+    category: "Analytics",
+    summary:
+      "Drop-in < 2 KB script (t.js) capturing pageviews, session click-path journeys, repeat viewer loyalty, countries, referrers, and real Core Web Vitals.",
+  },
+  "gate-integration": {
+    title: "Client Access Gate Integration",
+    category: "Access Gate",
+    summary:
+      "Protect Next.js proxy.ts, middleware.ts, or Express applications with sub-10ms Ed25519 passes and 100% fail-open resilience.",
+  },
+  "sdk-reference": {
+    title: "TypeScript SDK Reference (@rapidshift/sdk)",
+    category: "SDK",
+    summary:
+      "Complete API reference for createGate, createExpressGate, RapidShiftClient, caching, and TypeScript interfaces.",
+  },
+  webhooks: {
+    title: "Webhooks & Event Delivery",
+    category: "Automation",
+    summary:
+      "Signed HTTP POST event delivery, HMAC-SHA256 verification, replay protection, and exponential backoff retry schedule.",
+  },
+  "architecture-ddd": {
+    title: "Architecture & Domain-Driven Design",
+    category: "Architecture",
+    summary:
+      "15 bounded contexts, strict clean layering rules, transactional outbox pattern, and SQLite WAL concurrency.",
+  },
 };
 
 export async function generateStaticParams() {
@@ -27,8 +71,8 @@ export async function generateMetadata({ params }: DocsPageProps) {
   const guide = AVAILABLE_SLUGS[slug];
   if (!guide) return { title: "Not Found" };
   return {
-    title: `${guide.title} | RapidShift Documentation`,
-    description: `Documentation and integration guide for ${guide.title}`,
+    title: `${guide.title} | RapidShift Developer Docs`,
+    description: guide.summary,
   };
 }
 
@@ -37,7 +81,6 @@ export default async function GuideDetailPage({ params }: DocsPageProps) {
   const guide = AVAILABLE_SLUGS[slug];
   if (!guide) notFound();
 
-  // Load guide markdown file from docs/guides/
   const guidesDir = path.resolve(process.cwd(), "../../docs/guides");
   const fallbackDir = path.resolve(process.cwd(), "docs/guides");
   let filePath = path.join(guidesDir, `${slug}.md`);
@@ -52,263 +95,152 @@ export default async function GuideDetailPage({ params }: DocsPageProps) {
 
   const rawMarkdown = await fs.promises.readFile(filePath, "utf-8");
 
+  const currentIdx = GUIDE_ORDER.indexOf(slug as any);
+  const prevSlug = currentIdx > 0 ? GUIDE_ORDER[currentIdx - 1] : null;
+  const nextSlug =
+    currentIdx >= 0 && currentIdx < GUIDE_ORDER.length - 1
+      ? GUIDE_ORDER[currentIdx + 1]
+      : null;
+
   return (
-    <div className="w-full py-10 px-4 sm:px-6 lg:px-8 xl:px-10">
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-10">
-        {/* Left Sidebar Navigation */}
-        <aside className="lg:col-span-1 space-y-6">
-          <Link
-            href="/docs"
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to Documentation Hub</span>
-          </Link>
+    <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+      <DocsHeader />
 
-          <div className="space-y-2 border-t border-border/40 pt-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Integration Guides
-            </h4>
-            <nav className="space-y-1">
-              {Object.entries(AVAILABLE_SLUGS).map(([s, meta]) => {
-                const isActive = s === slug;
-                return (
-                  <Link
-                    key={s}
-                    href={`/docs/${s}`}
-                    className={`block px-3 py-2 text-xs rounded-lg transition-colors ${
-                      isActive
-                        ? "bg-primary/10 text-primary font-semibold"
-                        : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                    }`}
-                  >
-                    {meta.title}
-                  </Link>
-                );
-              })}
-            </nav>
-          </div>
-
-          <div className="rounded-lg border border-border/50 bg-card p-4 space-y-3 text-xs">
-            <div className="flex items-center gap-2 text-primary font-semibold">
-              <BookOpen className="w-4 h-4" />
-              <span>Interactive API</span>
-            </div>
-            <p className="text-muted-foreground">
-              Looking for request and response schemas for public endpoints?
-            </p>
+      <div className="max-w-7xl mx-auto py-8 sm:py-10 px-4 sm:px-6 lg:px-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          {/* Left Sticky Sidebar Navigation (3 cols) */}
+          <aside className="lg:col-span-3 lg:sticky lg:top-32 space-y-5">
             <Link
-              href="/docs/api"
-              className="inline-flex items-center gap-1 font-semibold text-primary hover:underline"
+              href="/docs"
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
             >
-              <span>Explore Scalar Reference</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>All Developer Docs</span>
             </Link>
-          </div>
-        </aside>
 
-        {/* Main Document Content */}
-        <main className="lg:col-span-3 space-y-6">
-          <div className="space-y-2 border-b border-border/40 pb-4">
-            <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded text-[11px] font-semibold bg-muted text-muted-foreground">
-              <span>{guide.category}</span>
+            <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-3 shadow-xs">
+              <div className="text-[11px] font-extrabold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 px-2">
+                Developer Guides
+              </div>
+              <nav className="space-y-1">
+                {GUIDE_ORDER.map((s) => {
+                  const meta = AVAILABLE_SLUGS[s]!;
+                  const isActive = s === slug;
+                  return (
+                    <Link
+                      key={s}
+                      href={`/docs/${s}`}
+                      className={`block px-3 py-2 text-xs rounded-xl transition-colors ${
+                        isActive
+                          ? "bg-blue-600 text-white font-bold shadow-xs"
+                          : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-medium"
+                      }`}
+                    >
+                      <div className="truncate">{meta.title}</div>
+                      <div
+                        className={`text-[10px] mt-0.5 ${
+                          isActive
+                            ? "text-blue-100"
+                            : "text-zinc-400 dark:text-zinc-500"
+                        }`}
+                      >
+                        {meta.category}
+                      </div>
+                    </Link>
+                  );
+                })}
+              </nav>
             </div>
-            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight">{guide.title}</h1>
-          </div>
 
-          <article className="prose prose-invert max-w-none space-y-6 text-sm sm:text-base leading-relaxed text-foreground/90">
-            {renderMarkdownContent(rawMarkdown)}
-          </article>
-        </main>
+            {/* Quick Universal Key & API Box */}
+            <div className="rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/60 dark:bg-indigo-950/30 p-4 space-y-3 text-xs">
+              <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-300 font-bold">
+                <Key className="w-4 h-4" />
+                <span>Need an API Key?</span>
+              </div>
+              <p className="text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                Generate one permanent Universal API Key (<code className="font-mono">rpk_live_...</code>) for all 23 embeds and REST APIs.
+              </p>
+              <div className="flex flex-col gap-1.5 pt-1">
+                <Link
+                  href="/portal/api-keys"
+                  className="inline-flex items-center justify-between px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition"
+                >
+                  <span>Generate Universal Key</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+                <Link
+                  href="/docs/api"
+                  className="inline-flex items-center justify-between px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-zinc-900 text-indigo-700 dark:text-indigo-300 font-semibold hover:bg-indigo-50 dark:hover:bg-zinc-800 transition"
+                >
+                  <span>Open REST API Explorer</span>
+                  <BookOpen className="w-3.5 h-3.5" />
+                </Link>
+              </div>
+            </div>
+          </aside>
+
+          {/* Main Document Content + Right TOC (9 cols) */}
+          <main className="lg:col-span-9 min-w-0 space-y-6">
+            {/* Guide Banner Header */}
+            <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 sm:p-8 shadow-xs space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-md text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800">
+                  {guide.category}
+                </span>
+                <span className="text-xs text-zinc-400">&bull;</span>
+                <span className="text-xs font-mono text-zinc-500 dark:text-zinc-400">
+                  docs/guides/{slug}.md
+                </span>
+              </div>
+              <h1 className="text-2xl sm:text-4xl font-black tracking-tight text-zinc-900 dark:text-white">
+                {guide.title}
+              </h1>
+              <p className="text-sm sm:text-base text-zinc-600 dark:text-zinc-300 leading-relaxed max-w-3xl">
+                {guide.summary}
+              </p>
+            </div>
+
+            {/* Markdown Content + Sticky Right TOC */}
+            <DocsMarkdownViewer markdown={rawMarkdown} />
+
+            {/* Previous / Next Guide Pagination */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
+              {prevSlug ? (
+                <Link
+                  href={`/docs/${prevSlug}`}
+                  className="group p-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500/60 transition flex flex-col justify-between"
+                >
+                  <span className="text-xs font-semibold text-zinc-400 flex items-center gap-1">
+                    <ArrowLeft className="w-3.5 h-3.5 group-hover:-translate-x-1 transition-transform" />
+                    Previous Guide
+                  </span>
+                  <span className="text-sm font-bold text-zinc-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 mt-1">
+                    {AVAILABLE_SLUGS[prevSlug]?.title}
+                  </span>
+                </Link>
+              ) : (
+                <div />
+              )}
+
+              {nextSlug ? (
+                <Link
+                  href={`/docs/${nextSlug}`}
+                  className="group p-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500/60 transition flex flex-col justify-between text-right"
+                >
+                  <span className="text-xs font-semibold text-zinc-400 flex items-center justify-end gap-1">
+                    Next Guide
+                    <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                  </span>
+                  <span className="text-sm font-bold text-zinc-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 mt-1">
+                    {AVAILABLE_SLUGS[nextSlug]?.title}
+                  </span>
+                </Link>
+              ) : null}
+            </div>
+          </main>
+        </div>
       </div>
     </div>
   );
-}
-
-/**
- * Server-rendered structured markdown processor.
- * Transforms headers, codeblocks, tables, blockquotes, and lists into React components.
- */
-function renderMarkdownContent(content: string): React.ReactNode {
-  const lines = content.split("\n");
-  const elements: React.ReactNode[] = [];
-  let index = 0;
-
-  let inCodeBlock = false;
-  let codeBuffer: string[] = [];
-  let codeLanguage = "";
-
-  let inTable = false;
-  let tableHeader: string[] = [];
-  let tableRows: string[][] = [];
-
-  const flushTable = () => {
-    if (inTable && tableHeader.length > 0) {
-      elements.push(
-        <div key={`table-${index}`} className="my-6 overflow-x-auto border border-border/50 rounded-lg">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-muted/50 font-semibold border-b border-border/40">
-              <tr>
-                {tableHeader.map((h, i) => (
-                  <th key={i} className="px-4 py-2.5">
-                    {h.trim()}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/20">
-              {tableRows.map((row, rIdx) => (
-                <tr key={rIdx} className="hover:bg-muted/20">
-                  {row.map((col, cIdx) => (
-                    <td key={cIdx} className="px-4 py-2 text-muted-foreground">
-                      {col.trim()}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-      inTable = false;
-      tableHeader = [];
-      tableRows = [];
-    }
-  };
-
-  while (index < lines.length) {
-    const line = lines[index];
-
-    // Code blocks
-    if (line.startsWith("```")) {
-      flushTable();
-      if (inCodeBlock) {
-        elements.push(
-          <div key={`code-${index}`} className="my-4 rounded-lg border border-border/60 bg-muted/30 overflow-hidden">
-            {codeLanguage && (
-              <div className="px-4 py-1.5 border-b border-border/40 bg-muted/60 text-[11px] font-mono font-medium text-muted-foreground">
-                {codeLanguage}
-              </div>
-            )}
-            <pre className="p-4 overflow-x-auto font-mono text-xs leading-normal">
-              <code>{codeBuffer.join("\n")}</code>
-            </pre>
-          </div>
-        );
-        inCodeBlock = false;
-        codeBuffer = [];
-        codeLanguage = "";
-      } else {
-        inCodeBlock = true;
-        codeLanguage = line.slice(3).trim();
-      }
-      index++;
-      continue;
-    }
-
-    if (inCodeBlock) {
-      codeBuffer.push(line);
-      index++;
-      continue;
-    }
-
-    // Tables (starts with |)
-    if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
-      const cols = line
-        .trim()
-        .slice(1, -1)
-        .split("|")
-        .map((c) => c.trim());
-
-      // Separator row (e.g. |---|---|)
-      if (cols.every((c) => /^[-:]+$/.test(c))) {
-        index++;
-        continue;
-      }
-
-      if (!inTable) {
-        inTable = true;
-        tableHeader = cols;
-      } else {
-        tableRows.push(cols);
-      }
-      index++;
-      continue;
-    } else {
-      flushTable();
-    }
-
-    // Horizontal Rule
-    if (line.trim() === "---") {
-      elements.push(<hr key={`hr-${index}`} className="my-8 border-border/40" />);
-      index++;
-      continue;
-    }
-
-    // Headings
-    if (line.startsWith("# ")) {
-      // Main title already rendered at top
-      index++;
-      continue;
-    }
-
-    if (line.startsWith("## ")) {
-      elements.push(
-        <h2 key={`h2-${index}`} className="text-2xl font-bold tracking-tight mt-8 mb-4 border-b border-border/30 pb-2">
-          {line.slice(3)}
-        </h2>
-      );
-      index++;
-      continue;
-    }
-
-    if (line.startsWith("### ")) {
-      elements.push(
-        <h3 key={`h3-${index}`} className="text-lg font-semibold tracking-tight mt-6 mb-2">
-          {line.slice(4)}
-        </h3>
-      );
-      index++;
-      continue;
-    }
-
-    // Blockquote
-    if (line.startsWith("> ")) {
-      elements.push(
-        <blockquote
-          key={`quote-${index}`}
-          className="my-4 border-l-4 border-primary pl-4 py-1 italic text-muted-foreground text-xs sm:text-sm bg-primary/5 rounded-r"
-        >
-          {line.slice(2)}
-        </blockquote>
-      );
-      index++;
-      continue;
-    }
-
-    // Lists
-    if (line.startsWith("- ") || line.startsWith("* ")) {
-      elements.push(
-        <li key={`li-${index}`} className="ml-4 list-disc text-muted-foreground my-1">
-          {line.slice(2)}
-        </li>
-      );
-      index++;
-      continue;
-    }
-
-    // Standard Paragraph
-    if (line.trim().length > 0) {
-      elements.push(
-        <p key={`p-${index}`} className="my-3 text-muted-foreground leading-relaxed">
-          {line}
-        </p>
-      );
-    }
-
-    index++;
-  }
-
-  flushTable();
-  return elements;
 }

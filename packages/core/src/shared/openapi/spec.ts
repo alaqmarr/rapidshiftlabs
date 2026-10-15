@@ -123,8 +123,8 @@ export const openApiSpec: OpenApiSpec = {
   },
   servers: [
     {
-      url: "https://api.rapidshiftlabs.com",
-      description: "Production API Gateway",
+      url: "https://rsl.alaqmar.dev",
+      description: "Production Control Plane (Dynamic Origin)",
     },
     {
       url: "http://localhost:3000",
