@@ -18,7 +18,34 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
-// Detect worker entrypoint (prefer dist/index.js if compiled, fallback to tsx src/index.ts)
+// Parse root .env file so both portal and worker receive all configured variables
+function loadRootEnv() {
+  const envFile = path.resolve(__dirname, ".env");
+  const vars = {};
+  if (!fs.existsSync(envFile)) return vars;
+  const content = fs.readFileSync(envFile, "utf8");
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eqIdx = line.indexOf("=");
+    if (eqIdx <= 0) continue;
+    const key = line.slice(0, eqIdx).trim();
+    let val = line.slice(eqIdx + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    vars[key] = val;
+  }
+  return vars;
+}
+
+const rootEnv = loadRootEnv();
+const port = process.env.PORT || rootEnv.PORT || 3000;
+
+// Detect worker entrypoint (prefer dist/index.js if compiled, fallback to pure JS tsx cli.mjs)
 const workerDist = path.resolve(__dirname, "apps/worker/dist/index.js");
 const hasWorkerDist = fs.existsSync(workerDist);
 
@@ -27,7 +54,7 @@ module.exports = {
     {
       name: "rapidshift-portal",
       script: "node_modules/next/dist/bin/next",
-      args: `start --port ${process.env.PORT || 3000}`,
+      args: `start --port ${port}`,
       cwd: path.resolve(__dirname, "apps/portal"),
       instances: 1, // Single instance to preserve in-process write mutex and SSE hub
       exec_mode: "fork",
@@ -35,8 +62,10 @@ module.exports = {
       max_memory_restart: "1G",
       exp_backoff_restart_delay: 100,
       env: {
+        ...rootEnv,
         NODE_ENV: "production",
-        PORT: process.env.PORT || 3000,
+        PORT: port,
+        REPO_ROOT: __dirname,
       },
       log_file: path.resolve(logsDir, "portal.log"),
       out_file: path.resolve(logsDir, "portal.log"),
@@ -46,7 +75,7 @@ module.exports = {
     },
     {
       name: "rapidshift-worker",
-      script: hasWorkerDist ? "dist/index.js" : "node_modules/.bin/tsx",
+      script: hasWorkerDist ? "dist/index.js" : "node_modules/tsx/dist/cli.mjs",
       args: hasWorkerDist ? "" : "src/index.ts",
       cwd: path.resolve(__dirname, "apps/worker"),
       instances: 1,
@@ -55,7 +84,9 @@ module.exports = {
       max_memory_restart: "1G",
       exp_backoff_restart_delay: 200,
       env: {
+        ...rootEnv,
         NODE_ENV: "production",
+        REPO_ROOT: __dirname,
       },
       log_file: path.resolve(logsDir, "worker.log"),
       out_file: path.resolve(logsDir, "worker.log"),
@@ -65,3 +96,4 @@ module.exports = {
     },
   ],
 };
+

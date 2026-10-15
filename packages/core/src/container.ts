@@ -37,7 +37,7 @@ import { getAnalyticsModule, type AnalyticsModule } from "./modules/analytics";
 import { getVaultModule, type VaultModule } from "./modules/vault";
 import { getReleasesModule, type ReleasesModule } from "./modules/releases";
 import { getEmbedsModule, type EmbedsModule } from "./modules/embeds";
-import { uow, type IUnitOfWork } from "./shared/infrastructure/db";
+import { uow, runMigrations, type IUnitOfWork } from "./shared/infrastructure/db";
 
 // Ensure entitlementModule has getClientEntitlement helper for Gateway status route
 if (typeof (EntitlementModule.prototype as any).getClientEntitlement !== "function") {
@@ -114,6 +114,11 @@ let containerInstance: Container | null = null;
 
 export function getContainer(): Container {
   if (!containerInstance) {
+    if (process.env.NODE_ENV !== "test") {
+      void runMigrations().catch((err) => {
+        console.warn("[Container] Background schema sync warning:", err);
+      });
+    }
     const monitoredDomainRepo = new DrizzleMonitoredDomainRepository();
     const domainCheckRepo = new DrizzleDomainCheckRepository();
     const incidentRepo = new DrizzleIncidentRepository();

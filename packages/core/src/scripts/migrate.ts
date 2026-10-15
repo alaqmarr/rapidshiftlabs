@@ -5,7 +5,11 @@ if (!process.env.AUTH_SECRET) {
   process.env.AUTH_SECRET = "development-auth-secret-123456789";
 }
 
+import { getTableColumns, getTableName } from "drizzle-orm";
 import { getRawClient, ensurePragmas } from "../shared/infrastructure/db/connection-factory";
+import * as coreSchema from "../shared/infrastructure/db/schema/core";
+import * as analyticsSchema from "../shared/infrastructure/db/schema/analytics";
+import * as metricsSchema from "../shared/infrastructure/db/schema/metrics";
 
 const STATEMENTS = [
   // 0. Base Core Tables
@@ -88,18 +92,22 @@ const STATEMENTS = [
 
   `CREATE TABLE IF NOT EXISTS audit_log (
     id text PRIMARY KEY NOT NULL,
-    timestamp integer NOT NULL,
     actor_id text NOT NULL,
-    actor_kind text NOT NULL,
-    action text NOT NULL,
-    resource_type text NOT NULL,
-    resource_id text NOT NULL,
+    actor_type text DEFAULT 'system' NOT NULL,
+    actor_email text,
     client_id text,
+    action text NOT NULL,
+    entity_type text NOT NULL,
+    entity_id text NOT NULL,
     ip_address text,
     user_agent text,
-    metadata text,
-    status text DEFAULT 'success' NOT NULL
+    details text,
+    timestamp integer NOT NULL
   );`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_client_time ON audit_log (client_id, timestamp);`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_actor_time ON audit_log (actor_id, timestamp);`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log (entity_type, entity_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log (timestamp);`,
 
   // 1. clients
   `CREATE TABLE IF NOT EXISTS clients (
@@ -697,102 +705,156 @@ export const ANALYTICS_STATEMENTS: string[] = [
   );`,
 ];
 
-export async function migrateCoreSchema(): Promise<void> {
-  await ensurePragmas("core");
-  const client = getRawClient("core");
-  for (const sql of STATEMENTS) {
+/**
+ * Automatically inspects all Drizzle table definitions in a schema module and
+ * adds any missing columns to existing SQLite tables before indexes are created.
+ */
+async function syncDrizzleColumns(
+  client: ReturnType<typeof getRawClient>,
+  schemaMod: Record<string, any>
+): Promise<void> {
+  const seenTables = new Set<string>();
+
+  for (const [, exportedVal] of Object.entries(schemaMod)) {
+    if (!exportedVal || typeof exportedVal !== "object") continue;
+
+    let tableName: string;
+    try {
+      tableName = getTableName(exportedVal as any);
+    } catch {
+      continue;
+    }
+    if (!tableName || seenTables.has(tableName)) continue;
+    seenTables.add(tableName);
+
+    try {
+      const pragma = await client.execute(`PRAGMA table_info(${tableName})`);
+      if (pragma.rows.length === 0) continue; // Table does not exist yet
+
+      const existingCols = new Set(pragma.rows.map((r: any) => String(r.name || r[1])));
+      const drizzleCols = getTableColumns(exportedVal as any);
+
+      for (const [, colDef] of Object.entries(drizzleCols) as [string, any][]) {
+        const sqlColName: string = colDef.name;
+        if (!sqlColName || existingCols.has(sqlColName)) continue;
+
+        const dataType = String(colDef.dataType || colDef.columnType || "string").toLowerCase();
+        const sqlType =
+          dataType.includes("number") || dataType.includes("int") || dataType.includes("boolean")
+            ? "integer"
+            : "text";
+
+        let defaultClause = "";
+        if (colDef.hasDefault && colDef.default !== undefined && colDef.default !== null) {
+          if (typeof colDef.default === "boolean") {
+            defaultClause = ` DEFAULT ${colDef.default ? 1 : 0}`;
+          } else if (typeof colDef.default === "number") {
+            defaultClause = ` DEFAULT ${colDef.default}`;
+          } else if (typeof colDef.default === "string") {
+            defaultClause = ` DEFAULT '${colDef.default.replace(/'/g, "''")}'`;
+          }
+        } else if (colDef.notNull) {
+          defaultClause = sqlType === "integer" ? " DEFAULT 0" : " DEFAULT ''";
+        }
+
+        const notNullClause = colDef.notNull ? " NOT NULL" : "";
+        const alterSql = `ALTER TABLE ${tableName} ADD COLUMN ${sqlColName} ${sqlType}${defaultClause}${notNullClause}`;
+        await client.execute(alterSql);
+        console.log(`[Migration] Auto-healed missing column: ${tableName}.${sqlColName}`);
+      }
+    } catch (err) {
+      console.warn(`[Migration] Warning while syncing table ${tableName}:`, err);
+    }
+  }
+}
+
+/**
+ * Repairs legacy outbox and audit_log tables that had old NOT NULL columns
+ * (such as audit_log.actor_kind / resource_type or outbox.retry_count).
+ */
+async function repairLegacyCoreTables(client: ReturnType<typeof getRawClient>): Promise<void> {
+  try {
+    const auditInfo = await client.execute("PRAGMA table_info(audit_log)");
+    if (auditInfo.rows.length > 0) {
+      const cols = new Set(auditInfo.rows.map((r: any) => String(r.name || r[1])));
+      if (cols.has("actor_kind") || !cols.has("actor_type") || !cols.has("entity_type")) {
+        console.log("[Migration] Rebuilding legacy audit_log table to match current schema...");
+        await client.execute(`CREATE TABLE IF NOT EXISTS audit_log_new (
+          id text PRIMARY KEY NOT NULL,
+          actor_id text NOT NULL,
+          actor_type text DEFAULT 'system' NOT NULL,
+          actor_email text,
+          client_id text,
+          action text NOT NULL,
+          entity_type text NOT NULL,
+          entity_id text NOT NULL,
+          ip_address text,
+          user_agent text,
+          details text,
+          timestamp integer NOT NULL
+        )`);
+        if (cols.has("actor_kind")) {
+          await client.execute(`
+            INSERT OR IGNORE INTO audit_log_new (
+              id, actor_id, actor_type, client_id, action, entity_type, entity_id, ip_address, user_agent, details, timestamp
+            )
+            SELECT
+              id,
+              actor_id,
+              CASE WHEN actor_kind IN ('admin', 'client', 'system', 'api_key') THEN actor_kind ELSE 'system' END,
+              client_id,
+              action,
+              COALESCE(resource_type, 'system'),
+              COALESCE(resource_id, 'system'),
+              ip_address,
+              user_agent,
+              metadata,
+              timestamp
+            FROM audit_log
+          `);
+        }
+        await client.execute("DROP TABLE audit_log");
+        await client.execute("ALTER TABLE audit_log_new RENAME TO audit_log");
+      }
+    }
+  } catch (err) {
+    console.warn("[Migration] Warning repairing legacy audit_log:", err);
+  }
+}
+
+async function executeStatementsSafely(
+  client: ReturnType<typeof getRawClient>,
+  statements: string[],
+  schemaMod: Record<string, any>
+): Promise<void> {
+  const createTableStmts = statements.filter((s) => /^\s*CREATE\s+TABLE/i.test(s));
+  const indexAndOtherStmts = statements.filter((s) => !/^\s*CREATE\s+TABLE/i.test(s));
+
+  // 1. Create any tables that don't exist yet
+  for (const sql of createTableStmts) {
     await client.execute(sql);
   }
 
-  // Ensure github columns exist on clients and projects if previously created
-  try {
-    const clientCols = await client.execute("PRAGMA table_info(clients)");
-    const existingClientCols = new Set(clientCols.rows.map((r: any) => String(r.name || r[1])));
-    if (!existingClientCols.has("github_repo")) {
-      await client.execute("ALTER TABLE clients ADD COLUMN github_repo text");
-    }
-    if (!existingClientCols.has("github_branch")) {
-      await client.execute("ALTER TABLE clients ADD COLUMN github_branch text DEFAULT 'main'");
-    }
+  // 2. Sync all Drizzle columns on existing tables BEFORE creating indexes
+  await syncDrizzleColumns(client, schemaMod);
 
-    const projCols = await client.execute("PRAGMA table_info(projects)");
-    const existingProjCols = new Set(projCols.rows.map((r: any) => String(r.name || r[1])));
-    if (!existingProjCols.has("github_repo")) {
-      await client.execute("ALTER TABLE projects ADD COLUMN github_repo text");
-    }
-    if (!existingProjCols.has("github_branch")) {
-      await client.execute("ALTER TABLE projects ADD COLUMN github_branch text DEFAULT 'main'");
-    }
-
-    const adminCols = await client.execute("PRAGMA table_info(admin_users)");
-    const existingAdminCols = new Set(adminCols.rows.map((r: any) => String(r.name || r[1])));
-    if (!existingAdminCols.has("status")) {
-      await client.execute("ALTER TABLE admin_users ADD COLUMN status text DEFAULT 'active' NOT NULL");
-    }
-
-    const outboxCols = await client.execute("PRAGMA table_info(outbox)");
-    const existingOutboxCols = new Set(outboxCols.rows.map((r: any) => String(r.name || r[1])));
-    if (!existingOutboxCols.has("attempts")) {
-      await client.execute("ALTER TABLE outbox ADD COLUMN attempts integer DEFAULT 0 NOT NULL");
-    }
-    if (!existingOutboxCols.has("max_attempts")) {
-      await client.execute("ALTER TABLE outbox ADD COLUMN max_attempts integer DEFAULT 5 NOT NULL");
-    }
-    if (!existingOutboxCols.has("next_retry_at")) {
-      await client.execute("ALTER TABLE outbox ADD COLUMN next_retry_at integer");
-    }
-    if (!existingOutboxCols.has("locked_at")) {
-      await client.execute("ALTER TABLE outbox ADD COLUMN locked_at integer");
-    }
-    if (!existingOutboxCols.has("updated_at")) {
-      await client.execute("ALTER TABLE outbox ADD COLUMN updated_at integer DEFAULT 0 NOT NULL");
-    }
-  } catch {
-    // ignore
+  // 3. Create indexes (now guaranteed that all referenced columns exist)
+  for (const sql of indexAndOtherStmts) {
+    await client.execute(sql);
   }
+}
+
+export async function migrateCoreSchema(): Promise<void> {
+  await ensurePragmas("core");
+  const client = getRawClient("core");
+  await repairLegacyCoreTables(client);
+  await executeStatementsSafely(client, STATEMENTS, coreSchema);
 }
 
 export async function migrateAnalyticsSchema(): Promise<void> {
   await ensurePragmas("analytics");
   const client = getRawClient("analytics");
-  for (const sql of ANALYTICS_STATEMENTS) {
-    await client.execute(sql);
-  }
-
-  // Ensure all columns exist on raw_events if table was previously created
-  try {
-    const cols = await client.execute("PRAGMA table_info(raw_events)");
-    const existingCols = new Set(cols.rows.map((r: any) => String(r.name || r[1])));
-    const additions = [
-      { col: "visitor_hash", type: "text" },
-      { col: "session_id", type: "text" },
-      { col: "path", type: "text" },
-      { col: "referrer", type: "text" },
-      { col: "utm_source", type: "text" },
-      { col: "utm_medium", type: "text" },
-      { col: "utm_campaign", type: "text" },
-      { col: "browser", type: "text" },
-      { col: "os", type: "text" },
-      { col: "device", type: "text" },
-      { col: "country", type: "text" },
-      { col: "metric_name", type: "text" },
-      { col: "metric_value", type: "integer" },
-      { col: "metric_rating", type: "text" },
-      { col: "payload", type: "text" },
-      { col: "created_at", type: "integer DEFAULT 0 NOT NULL" },
-    ];
-    for (const { col, type } of additions) {
-      if (!existingCols.has(col)) {
-        try {
-          await client.execute(`ALTER TABLE raw_events ADD COLUMN ${col} ${type}`);
-        } catch {
-          // ignore if concurrent or already added
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
+  await executeStatementsSafely(client, ANALYTICS_STATEMENTS, analyticsSchema);
 }
 
 export const METRICS_STATEMENTS: string[] = [
@@ -823,9 +885,7 @@ export const METRICS_STATEMENTS: string[] = [
 export async function migrateMetricsSchema(): Promise<void> {
   await ensurePragmas("metrics");
   const client = getRawClient("metrics");
-  for (const sql of METRICS_STATEMENTS) {
-    await client.execute(sql);
-  }
+  await executeStatementsSafely(client, METRICS_STATEMENTS, metricsSchema);
 }
 
 export async function runMigrations(): Promise<void> {
@@ -849,4 +909,5 @@ async function main() {
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` || process.argv[1]?.endsWith("migrate.ts")) {
   void main();
 }
+
 

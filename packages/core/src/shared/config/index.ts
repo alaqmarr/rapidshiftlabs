@@ -49,13 +49,23 @@ export function findRepoRoot(start = process.cwd()): string {
 
 export function getConfig(): AppConfig {
   if (cached) return cached;
+  const repoRoot = findRepoRoot();
+  if (!process.env.MASTER_KEY || !process.env.AUTH_SECRET) {
+    try {
+      const envPath = path.join(repoRoot, ".env");
+      if (fs.existsSync(envPath) && typeof process.loadEnvFile === "function") {
+        process.loadEnvFile(envPath);
+      }
+    } catch {
+      // ignore if .env is unreadable
+    }
+  }
   const parsed = EnvSchema.safeParse(process.env);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`).join("\n");
     throw new Error(`Invalid environment configuration:\n${issues}\nSee .env.example`);
   }
   const env = parsed.data;
-  const repoRoot = findRepoRoot();
   const dataDir = path.resolve(/*turbopackIgnore: true*/ env.DATA_DIR ?? path.join(repoRoot, "data"));
   fs.mkdirSync(dataDir, { recursive: true });
   const uploadsDir = path.join(dataDir, "uploads");

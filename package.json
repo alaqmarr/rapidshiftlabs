@@ -22,7 +22,11 @@
     "db:generate": "pnpm --filter @rsl/core db:generate",
     "db:migrate": "pnpm --filter @rsl/core db:migrate",
     "admin:create": "pnpm --filter @rsl/core admin:create",
-    "seed:demo": "pnpm --filter @rsl/core seed:demo"
+    "seed:demo": "pnpm --filter @rsl/core seed:demo",
+    "app:update": "node deploy/scripts/update.mjs",
+    "update:app": "node deploy/scripts/update.mjs",
+    "deploy:update": "node deploy/scripts/update.mjs",
+    "update": "node deploy/scripts/update.mjs"
   },
   "devDependencies": {
     "turbo": "^2.5.0",
