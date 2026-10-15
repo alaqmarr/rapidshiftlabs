@@ -27,6 +27,7 @@ const STATEMENTS = [
     password_hash text NOT NULL,
     totp_secret_enc text,
     totp_enabled integer DEFAULT 0 NOT NULL,
+    status text DEFAULT 'active' NOT NULL,
     session_version integer DEFAULT 1 NOT NULL,
     last_login_at integer,
     created_at integer NOT NULL,
@@ -715,6 +716,12 @@ export async function migrateCoreSchema(): Promise<void> {
     }
     if (!existingProjCols.has("github_branch")) {
       await client.execute("ALTER TABLE projects ADD COLUMN github_branch text DEFAULT 'main'");
+    }
+
+    const adminCols = await client.execute("PRAGMA table_info(admin_users)");
+    const existingAdminCols = new Set(adminCols.rows.map((r: any) => String(r.name || r[1])));
+    if (!existingAdminCols.has("status")) {
+      await client.execute("ALTER TABLE admin_users ADD COLUMN status text DEFAULT 'active' NOT NULL");
     }
   } catch {
     // ignore

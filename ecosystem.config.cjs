@@ -26,8 +26,8 @@ module.exports = {
   apps: [
     {
       name: "rapidshift-portal",
-      script: "node_modules/.bin/next",
-      args: "start --port 3000",
+      script: "node_modules/next/dist/bin/next",
+      args: `start --port ${process.env.PORT || 3000}`,
       cwd: path.resolve(__dirname, "apps/portal"),
       instances: 1, // Single instance to preserve in-process write mutex and SSE hub
       exec_mode: "fork",
@@ -36,7 +36,7 @@ module.exports = {
       exp_backoff_restart_delay: 100,
       env: {
         NODE_ENV: "production",
-        PORT: 3000,
+        PORT: process.env.PORT || 3000,
       },
       log_file: path.resolve(logsDir, "portal.log"),
       out_file: path.resolve(logsDir, "portal.log"),
