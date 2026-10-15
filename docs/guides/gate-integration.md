@@ -62,9 +62,9 @@ import { createGate } from "@rapidshift/sdk";
 
 // Initialize the gate instance with your credentials
 const gate = createGate({
-  apiKey: process.env.RAPIDSHIFT_API_KEY!, // Secret key: rsk_live_...
-  apiUrl: process.env.RAPIDSHIFT_API_URL || "https://api.rapidshiftlabs.com",
-  blockedRedirectUrl: "https://app.rapidshiftlabs.com/portal/billing",
+  apiKey: process.env.RAPIDSHIFT_API_KEY!, // Secret or Universal API key: rsk_live_... or rpk_live_...
+  apiUrl: process.env.RAPIDSHIFT_API_URL || "https://rsl.alaqmar.dev",
+  blockedRedirectUrl: "https://rsl.alaqmar.dev/portal/billing",
   timeoutMs: 1500, // Timeout before triggering fail-open mode
   failOpen: true,  // Guaranteed uptime even if control plane is down
   excludePaths: [
@@ -106,7 +106,7 @@ import { createGate } from "@rapidshift/sdk";
 
 const gate = createGate({
   apiKey: process.env.RAPIDSHIFT_API_KEY!,
-  apiUrl: "https://api.rapidshiftlabs.com",
+  apiUrl: process.env.RAPIDSHIFT_API_URL || "https://rsl.alaqmar.dev",
   blockedRedirectUrl: "/payment-due",
   failOpen: true,
 });
@@ -133,7 +133,7 @@ export const config = {
 If integrating from Express, Fastify, Go, Python, or Ruby, query the gate endpoint directly:
 
 ```bash
-curl -X GET "https://api.rapidshiftlabs.com/api/v1/access/status" \
+curl -X GET "https://rsl.alaqmar.dev/api/v1/access/status" \
   -H "Authorization: Bearer rsk_live_01HQXYZ123456789"
 ```
 

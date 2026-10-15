@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   Key,
@@ -11,15 +11,39 @@ import {
   Trash2,
   Copy,
   Check,
-  ArrowLeft,
   Code2,
   CheckCircle2,
   AlertCircle,
   X,
   Sparkles,
+  Layers,
+  Globe,
 } from "lucide-react";
 import { useAlert } from "@/components/ui/alert-popup";
 import { formatDate } from "@/lib/format";
+import { getSiteOrigin } from "@/lib/site-url";
+
+export const ALL_UNIVERSAL_SCOPES = [
+  "access:read",
+  "billing:read",
+  "contracts:read",
+  "fleet:read",
+  "fleet:restart",
+  "fleet:logs",
+  "monitoring:read",
+  "support:read",
+  "support:write",
+  "support:escalate",
+  "analytics:read",
+  "analytics:write",
+  "releases:read",
+  "vault:read",
+  "vault:reveal",
+  "embeds:create",
+  "webhooks:read",
+  "webhooks:write",
+  "clients:read",
+] as const;
 
 export interface PortalApiKeyItem {
   id: string;
@@ -61,18 +85,28 @@ export function PortalApiKeysView({
   const [showGenerateModal, setShowGenerateModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [savedUniversalKey, setSavedUniversalKey] = useState<string>("");
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   const [formData, setFormData] = useState({
-    name: "Production Access Gate",
-    type: "secret" as "secret" | "publishable",
-    scopes: ["access:read"],
+    name: "Universal Embed & Client API Key",
+    type: "publishable" as "secret" | "publishable",
+    scopes: [...ALL_UNIVERSAL_SCOPES] as string[],
   });
 
   const [generatedSecret, setGeneratedSecret] = useState<{
     apiKey: PortalApiKeyItem;
     rawKey: string;
   } | null>(null);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`rsl_universal_api_key_${clientId}`);
+      if (stored) setSavedUniversalKey(stored);
+    } catch {
+      // ignore storage errors
+    }
+  }, [clientId]);
 
   const showToast = (message: string, type: "success" | "error" = "success") => {
     setToast({ message, type });
@@ -102,8 +136,11 @@ export function PortalApiKeysView({
     }
   };
 
-  const handleGenerateKey = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const createKeyRequest = async (payload: {
+    name: string;
+    type: "secret" | "publishable";
+    scopes: string[];
+  }) => {
     try {
       setSubmitting(true);
       const res = await fetch("/api/v1/portal/api-keys", {
@@ -111,24 +148,31 @@ export function PortalApiKeysView({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           clientId,
-          name: formData.name,
-          type: formData.type,
-          scopes: formData.scopes,
+          name: payload.name,
+          type: payload.type,
+          scopes: payload.scopes,
         }),
       });
       const data = (await res.json()) as { apiKey: PortalApiKeyItem; rawKey: string; error?: string };
       if (!res.ok) throw new Error(data.error || "Failed to generate key");
 
+      try {
+        localStorage.setItem(`rsl_universal_api_key_${clientId}`, data.rawKey);
+        setSavedUniversalKey(data.rawKey);
+      } catch {
+        // ignore
+      }
+
       setGeneratedSecret(data);
       setShowGenerateModal(false);
       showSuccess(
-        "Gateway API Key Ready",
-        `New ${formData.type.toUpperCase()} key '${formData.name}' created. Copy the raw key now; it will never be displayed again.`,
+        "Universal API Key Ready",
+        `New ${payload.type.toUpperCase()} key '${payload.name}' created. It works permanently across all 23 Embeds (Web Components & Iframes) and the Client Data API without needing to mint tokens.`,
         [
-          { label: "Key Name", value: formData.name },
+          { label: "Key Name", value: payload.name },
           { label: "Key Prefix", value: data.apiKey.keyPrefix },
-          { label: "Type", value: formData.type.toUpperCase() },
-          { label: "Raw Secret Key", value: data.rawKey, copyable: true, isMonospace: true },
+          { label: "Scopes Granted", value: `${payload.scopes.length} Scopes (All Embeds & Data)` },
+          { label: "Raw API Key", value: data.rawKey, copyable: true, isMonospace: true },
         ],
         data.rawKey
       );
@@ -141,8 +185,21 @@ export function PortalApiKeysView({
     }
   };
 
+  const handleGenerateKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await createKeyRequest(formData);
+  };
+
+  const handleOneClickUniversalKey = async () => {
+    await createKeyRequest({
+      name: "Universal Embed & Client API Key",
+      type: "publishable",
+      scopes: [...ALL_UNIVERSAL_SCOPES],
+    });
+  };
+
   const handleRevokeKey = async (keyId: string) => {
-    if (!confirm("Are you sure you want to revoke this API key? Client requests using this key will be blocked immediately.")) return;
+    if (!confirm("Are you sure you want to revoke this API key? Client requests and embeds using this key will be blocked immediately.")) return;
     try {
       setSubmitting(true);
       const res = await fetch(`/api/v1/portal/api-keys/${keyId}`, {
@@ -161,11 +218,40 @@ export function PortalApiKeysView({
     }
   };
 
+  const siteOrigin = getSiteOrigin();
+  const exampleKey = savedUniversalKey || "rpk_live_YOUR_UNIVERSAL_API_KEY";
+
+  const webComponentUniversalSnippet = `<!-- 1. Load RapidShift Embed Engine once with your Universal API Key -->
+<script defer src="${siteOrigin}/embed.js" data-api-key="${exampleKey}"></script>
+
+<!-- 2. Drop ANY of the 23 Web Components anywhere on your site (no token minting needed!) -->
+<rsl-client-dashboard theme="dark"></rsl-client-dashboard>
+<rsl-billing-summary theme="dark"></rsl-billing-summary>
+<rsl-analytics-overview theme="dark"></rsl-analytics-overview>`;
+
+  const iframeUniversalSnippet = `<!-- Works with all 23 widgets using ?apiKey= (no clientId or 15m token needed) -->
+<iframe
+  src="${siteOrigin}/embed/client-dashboard?apiKey=${exampleKey}&theme=dark"
+  width="100%"
+  height="520"
+  style="border: none; border-radius: 16px;"
+  loading="lazy"
+></iframe>`;
+
+  const restApiSnippet = `// Fetch all client data (billing, invoices, fleet, domains, tickets, analytics)
+const res = await fetch("${siteOrigin}/api/v1/client/data?include=client,billing,invoices,fleet,domains,tickets,analytics", {
+  headers: {
+    "x-api-key": "${exampleKey}"
+  }
+});
+const { data } = await res.json();`;
+
   const proxyCodeSnippet = `// apps/web/src/proxy.ts (or middleware.ts)
 import { createGate } from "@rapidshift/sdk";
 
 const gate = createGate({
   secretKey: process.env.RAPIDSHIFT_SECRET_KEY!,
+  baseUrl: process.env.RAPIDSHIFT_URL || "${siteOrigin}",
   blockedPage: "/payment-due",
   failMode: "open", // Client app stays accessible if RapidShift is offline
 });
@@ -198,23 +284,94 @@ export default async function proxy(req: Request) {
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight text-zinc-900 dark:text-white">
-              API Keys &amp; Access Gate
+              Universal API Keys, Embeds &amp; Access Gate
             </h1>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Cryptographic passes, fail-open proxy integration, and scoped service keys for {clientName}
+              Generate one permanent API key to power all 23 Web Component / Iframe embeds, Client Data APIs, and Access Gate for {clientName}
             </p>
           </div>
         </div>
 
-        <button
-          onClick={() => setShowGenerateModal(true)}
-          className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-xs transition cursor-pointer self-start sm:self-auto"
-          data-testid="generate-key-btn"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Generate New Key</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+          <button
+            onClick={handleOneClickUniversalKey}
+            disabled={submitting}
+            className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-xs transition cursor-pointer disabled:opacity-50"
+            data-testid="one-click-universal-key-btn"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>{submitting ? "Generating..." : "1-Click Universal Embed & API Key"}</span>
+          </button>
+
+          <button
+            onClick={() => setShowGenerateModal(true)}
+            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-xs transition cursor-pointer"
+            data-testid="generate-key-btn"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Custom Scoped Key</span>
+          </button>
+        </div>
       </div>
+
+      {/* Universal Embed Key Banner */}
+      <section className="bg-gradient-to-r from-indigo-950/90 via-slate-900 to-blue-950/90 text-white border border-indigo-500/30 rounded-2xl p-6 shadow-sm">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-2 max-w-2xl">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">
+              <Layers className="w-3.5 h-3.5" />
+              <span>Zero Token Minting Required</span>
+            </div>
+            <h2 className="text-lg font-extrabold tracking-tight">
+              Use One Universal API Key Across All 23 Embeds &amp; REST APIs
+            </h2>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Instead of minting short-lived 15-minute <code className="text-indigo-300 font-mono">emb_...</code> tokens each time, generate a permanent{" "}
+              <strong className="text-white">Universal API Key (<code className="font-mono text-emerald-300">rpk_live_...</code>)</strong> once. Pass it via{" "}
+              <code className="text-indigo-300 font-mono">api-key=&quot;rpk_live_...&quot;</code> on Web Components,{" "}
+              <code className="text-indigo-300 font-mono">?apiKey=rpk_live_...</code> on Iframes, or{" "}
+              <code className="text-indigo-300 font-mono">x-api-key</code> on <code className="text-indigo-300 font-mono">/api/v1/client/data</code>.
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+            <Link
+              href="/portal/embeds"
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white border border-white/15 text-xs font-semibold transition"
+            >
+              <Code2 className="w-4 h-4 text-indigo-300" />
+              <span>Open Embed Studio</span>
+            </Link>
+            <button
+              onClick={handleOneClickUniversalKey}
+              disabled={submitting}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold shadow-lg shadow-indigo-500/20 transition cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>Generate Universal Key Now</span>
+            </button>
+          </div>
+        </div>
+
+        {savedUniversalKey && (
+          <div className="mt-4 pt-4 border-t border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-xs text-emerald-300">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>Active Universal Key saved in your browser for instant Embed Studio snippets:</span>
+              <code className="px-2 py-0.5 rounded bg-black/40 border border-white/10 font-mono text-[11px] text-white">
+                {savedUniversalKey}
+              </code>
+            </div>
+            <button
+              onClick={() => copyToClipboard(savedUniversalKey, "savedUniversal")}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-semibold text-white self-start sm:self-auto cursor-pointer"
+            >
+              {copiedKey === "savedUniversal" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>Copy Key</span>
+            </button>
+          </div>
+        )}
+      </section>
 
       {/* Live Gate Status Banner */}
       <section className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
@@ -258,7 +415,7 @@ export default async function proxy(req: Request) {
               </div>
             </div>
 
-            <div className="p-3 bg-zinc-50 dark:bg-zinc-800/60 rounded-xl border border-zinc-200 dark:border-zinc-700/60">
+            <div className="p-3 bg-zinc-50 dark:bg-zinc-900/60 rounded-xl border border-zinc-200 dark:border-zinc-700/60">
               <div className="text-[10px] uppercase text-zinc-400 font-semibold tracking-wider">Edge Cache TTL</div>
               <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 mt-1 font-mono">
                 {gate.ttlSeconds}s (sub-10ms)
@@ -272,9 +429,9 @@ export default async function proxy(req: Request) {
       <section className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm space-y-4">
         <div className="flex items-center justify-between pb-4 border-b border-zinc-200 dark:border-zinc-800">
           <div>
-            <h3 className="text-base font-bold text-zinc-900 dark:text-white">Active Service Keys</h3>
+            <h3 className="text-base font-bold text-zinc-900 dark:text-white">Active Service &amp; Universal Embed Keys</h3>
             <p className="text-xs text-zinc-500">
-              Use these secret keys in your backend or Next.js proxy to authenticate access checks.
+              Use these keys in Web Components, Iframes, REST API requests, or your Next.js proxy.
             </p>
           </div>
           <button
@@ -291,7 +448,7 @@ export default async function proxy(req: Request) {
           <div className="py-12 text-center text-xs text-zinc-400 border border-dashed border-zinc-200 dark:border-zinc-800 rounded-xl">
             <Key className="w-8 h-8 mx-auto text-zinc-300 dark:text-zinc-700 mb-2" />
             <p>No API keys generated yet.</p>
-            <p className="text-[11px] text-zinc-500 mt-1">Click &quot;Generate New Key&quot; to create a secret or publishable key.</p>
+            <p className="text-[11px] text-zinc-500 mt-1">Click &quot;1-Click Universal Embed &amp; API Key&quot; above to create one immediately.</p>
           </div>
         ) : (
           <div className="divide-y divide-zinc-200 dark:divide-zinc-800 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden text-xs">
@@ -302,7 +459,7 @@ export default async function proxy(req: Request) {
                 data-testid={`portal-key-row-${k.id}`}
               >
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-semibold text-zinc-900 dark:text-zinc-100">{k.name}</span>
                     <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-medium">
                       {k.keyPrefix}...
@@ -310,6 +467,11 @@ export default async function proxy(req: Request) {
                     <span className="px-1.5 py-0.2 rounded text-[10px] font-medium uppercase bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
                       {k.type}
                     </span>
+                    {k.scopes && k.scopes.length >= 10 && (
+                      <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold uppercase bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800">
+                        Universal Embed + API
+                      </span>
+                    )}
                     {k.revokedAt ? (
                       <span className="px-1.5 py-0.2 rounded text-[10px] font-medium uppercase bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300">
                         Revoked
@@ -320,8 +482,13 @@ export default async function proxy(req: Request) {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-3 text-zinc-400 text-[11px]">
-                    <span>Scopes: {k.scopes?.join(", ") || "access:read"}</span>
+                  <div className="flex items-center gap-3 text-zinc-400 text-[11px] flex-wrap">
+                    <span>
+                      Scopes:{" "}
+                      {k.scopes && k.scopes.length > 6
+                        ? `All ${k.scopes.length} Scopes (${k.scopes.slice(0, 4).join(", ")}, ...)`
+                        : k.scopes?.join(", ") || "access:read"}
+                    </span>
                     <span>&bull;</span>
                     <span>Created: {formatDate(k.createdAt)}</span>
                     {k.lastUsedAt && (
@@ -350,14 +517,79 @@ export default async function proxy(req: Request) {
         )}
       </section>
 
-      {/* Integration Guide Section */}
+      {/* Universal Embed & Client Data API Quick Guide */}
+      <section className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm space-y-5">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Globe className="w-5 h-5 text-indigo-600" />
+            <h3 className="text-base font-bold text-zinc-900 dark:text-white">
+              Universal Embeds (Web Component &amp; Iframe) + Client Data API
+            </h3>
+          </div>
+          <span className="text-[11px] font-mono text-zinc-500">
+            Active Domain: {siteOrigin}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="space-y-1.5">
+            <div className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              A. Web Components (All 23 Widgets)
+            </div>
+            <div className="p-3.5 bg-zinc-950 text-zinc-100 rounded-xl font-mono text-[11px] overflow-x-auto relative border border-zinc-800">
+              <button
+                onClick={() => copyToClipboard(webComponentUniversalSnippet, "wc-uni")}
+                className="absolute top-2.5 right-2.5 text-zinc-400 hover:text-white"
+                title="Copy Web Component Snippet"
+              >
+                {copiedKey === "wc-uni" ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+              <pre className="leading-relaxed">{webComponentUniversalSnippet}</pre>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              B. Direct Iframe Embed (Zero JS)
+            </div>
+            <div className="p-3.5 bg-zinc-950 text-zinc-100 rounded-xl font-mono text-[11px] overflow-x-auto relative border border-zinc-800">
+              <button
+                onClick={() => copyToClipboard(iframeUniversalSnippet, "iframe-uni")}
+                className="absolute top-2.5 right-2.5 text-zinc-400 hover:text-white"
+                title="Copy Iframe Snippet"
+              >
+                {copiedKey === "iframe-uni" ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+              <pre className="leading-relaxed">{iframeUniversalSnippet}</pre>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              C. Unified Client Data REST API
+            </div>
+            <div className="p-3.5 bg-zinc-950 text-zinc-100 rounded-xl font-mono text-[11px] overflow-x-auto relative border border-zinc-800">
+              <button
+                onClick={() => copyToClipboard(restApiSnippet, "rest-uni")}
+                className="absolute top-2.5 right-2.5 text-zinc-400 hover:text-white"
+                title="Copy REST API Snippet"
+              >
+                {copiedKey === "rest-uni" ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+              <pre className="leading-relaxed">{restApiSnippet}</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* SDK Gate Integration Guide Section */}
       <section className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm space-y-4">
         <div className="flex items-center gap-2">
           <Code2 className="w-5 h-5 text-blue-600" />
-          <h3 className="text-base font-bold text-zinc-900 dark:text-white">SDK Quick Integration Guide</h3>
+          <h3 className="text-base font-bold text-zinc-900 dark:text-white">Access Gate SDK Quick Integration Guide</h3>
         </div>
         <p className="text-xs text-zinc-500 leading-relaxed">
-          Protect all routes in your client Next.js application by installing <code>@rapidshift/sdk</code> and registering <code>createGate</code> in <code>proxy.ts</code>.
+          Protect routes in your client Next.js application by installing <code>@rapidshift/sdk</code> and registering <code>createGate</code> in <code>proxy.ts</code>.
         </p>
 
         <div className="space-y-3">
@@ -393,7 +625,7 @@ export default async function proxy(req: Request) {
       {/* Generate API Key Modal */}
       {showGenerateModal && (
         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-2xl max-w-md w-full p-6 space-y-4">
+          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-2xl max-w-lg w-full p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800">
               <h3 className="font-semibold text-base">Generate New API Key</h3>
               <button
@@ -412,7 +644,7 @@ export default async function proxy(req: Request) {
                   required
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="e.g. Production Access Gate"
+                  placeholder="e.g. Universal Embed & Client API Key"
                   className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                   data-testid="portal-key-name-input"
                 />
@@ -425,15 +657,34 @@ export default async function proxy(req: Request) {
                   onChange={(e) => setFormData({ ...formData, type: e.target.value as "secret" | "publishable" })}
                   className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="secret">Secret Key (rsk_live_...) - Server / Proxy only</option>
-                  <option value="publishable">Publishable Key (rpk_live_...) - Browser client</option>
+                  <option value="publishable">Publishable / Embed Key (rpk_live_...) - Works in Web Components, Iframes &amp; API</option>
+                  <option value="secret">Secret Key (rsk_live_...) - Backend Server / Proxy / Full API</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1.5">Permitted Scopes</label>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  {["access:read", "billing:read", "contracts:read", "fleet:read", "monitoring:read", "support:read", "analytics:read"].map((scope) => (
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">Permitted Scopes ({formData.scopes.length} selected)</label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, scopes: [...ALL_UNIVERSAL_SCOPES] })}
+                      className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                    >
+                      Select All (Universal)
+                    </button>
+                    <span className="text-zinc-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, scopes: ["access:read"] })}
+                      className="text-[11px] text-zinc-500 hover:underline cursor-pointer"
+                    >
+                      Gate Only
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 text-xs max-h-52 overflow-y-auto p-1">
+                  {ALL_UNIVERSAL_SCOPES.map((scope) => (
                     <label key={scope} className="flex items-center gap-2 cursor-pointer p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40">
                       <input
                         type="checkbox"
@@ -447,7 +698,7 @@ export default async function proxy(req: Request) {
                         }}
                         className="rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
                       />
-                      <span className="font-mono text-[11px]">{scope}</span>
+                      <span className="font-mono text-[10px] truncate">{scope}</span>
                     </label>
                   ))}
                 </div>
@@ -485,13 +736,13 @@ export default async function proxy(req: Request) {
                 <Key className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="font-bold text-base text-zinc-900 dark:text-white">API Key Generated</h3>
-                <p className="text-xs text-zinc-500">Copy this secret key now. It will never be shown again.</p>
+                <h3 className="font-bold text-base text-zinc-900 dark:text-white">Universal API Key Generated</h3>
+                <p className="text-xs text-zinc-500">Copy this key now. It is also pre-filled in your Embed Studio.</p>
               </div>
             </div>
 
             <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-lg text-xs text-amber-800 dark:text-amber-200">
-              RapidShift stores only a cryptographic SHA-256 hash. If you lose this key, you will have to generate a new one.
+              RapidShift stores only a cryptographic SHA-256 hash in the database. Keep this key safe for your embeds and API calls.
             </div>
 
             <div className="p-3 bg-zinc-100 dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 flex items-center justify-between gap-2">

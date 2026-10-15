@@ -373,50 +373,60 @@ if (consecutiveFailures >= threshold && !existingIncident) {
     id: "portal-live-embeds",
     category: "portal",
     badge: "Client Runbook",
-    title: "In-Place Interactive Embeds (Zero Redirection)",
+    title: "Universal API Key Embeds (Web Components, Iframes & Client Data API)",
     summary:
-      "How clients embed live interactive widgets directly into their own applications to let users settle invoices, restart servers, and reply to tickets without portal redirection.",
-    timeToRead: "6 min read",
-    tags: ["embeds", "in-place", "payments", "terminal", "interactive"],
+      "Generate a single permanent Universal API Key (rpk_live_...) once and use it across all 23 Web Components, Iframes, in-place actions, and /api/v1/client/data without ever having to mint short-lived tokens.",
+    timeToRead: "5 min read",
+    tags: ["embeds", "api-key", "web-components", "iframe", "in-place", "interactive"],
     routeLink: "/portal/embeds",
     steps: [
       {
-        title: "1. The In-Place Action Paradigm",
+        title: "1. Generate Your Universal API Key Once",
         description:
-          "Unlike legacy widgets that redirect users to an external portal, RapidShift Embeds execute actions in-place: settling invoices triggers instant receipt verification; restarting PM2 servers runs with a live 60s cooldown; viewing terminal logs streams stdout directly inside the host page.",
-      },
-      {
-        title: "2. Mint Scoped Embed Token",
-        description:
-          "In /portal/embeds, click 'Mint Embed Token'. Select allowed widgets (or select '*' for full dashboard) and choose expiration TTL (up to 365 days).",
-        code: `// POST /api/v1/embeds/token
+          "Open Client Portal -> API Keys (/portal/api-keys) or Embed Studio (/portal/embeds) and click '1-Click Universal Embed & API Key'. Copy your permanent rpk_live_... key. You never need to mint 15-minute tokens again.",
+        code: `// POST /api/v1/portal/api-keys (1-Click Universal Preset)
 {
-  "clientId": "cli_01M4KF1YVKPEAR7WNBNV4RYB67",
-  "widget": "*",
-  "ttlSeconds": 2592000
+  "name": "Universal Embed & Client API Key",
+  "type": "publishable",
+  "scopes": ["access:read", "billing:read", "fleet:read", "fleet:restart", "fleet:logs", "monitoring:read", "support:read", "support:write", "analytics:read", "releases:read", "vault:read"]
 }`,
         language: "json",
       },
       {
-        title: "3. Add Declarative Container to Your Web Page",
+        title: "2. Method A: Native Web Components (All 23 Widgets)",
         description:
-          "Insert the script tag in your document head or layout, then place a declarative div anywhere in your markup:",
-        code: `<!-- 1. Include Script (Once) -->
-<script src="https://controlplane.rapidshiftlabs.com/embed.js" async></script>
+          "Load embed.js once with data-api-key, or pass api-key directly on any <rsl-*> or <rsl-embed> custom element:",
+        code: `<!-- 1. Include Embed Runtime once in <head> or <body> -->
+<script defer src="https://rsl.alaqmar.dev/embed.js" data-api-key="rpk_live_YOUR_UNIVERSAL_API_KEY"></script>
 
-<!-- 2. Place Live Interactive Widget -->
-<div 
-  data-rsl-widget="billing-summary" 
-  data-rsl-token="emb_YOUR_SCOPED_TOKEN"
-  data-rsl-theme="dark"
-  data-rsl-accent="#2563eb"
-></div>`,
+<!-- 2. Drop ANY of the 23 Web Components anywhere on your page -->
+<rsl-client-dashboard theme="dark"></rsl-client-dashboard>
+<rsl-billing-summary theme="dark"></rsl-billing-summary>
+<rsl-analytics-overview theme="dark"></rsl-analytics-overview>`,
         language: "html",
       },
       {
-        title: "4. Automatic Parent Iframe Auto-Resize",
+        title: "3. Method B: Responsive Iframe (Zero JS Dependency)",
         description:
-          "RapidShift's embed.js listens for 'rsl-embed-resize' postMessage events from the widget iframe and dynamically resizes the container height. No nested scrollbars or clipping.",
+          "Pass ?apiKey=rpk_live_... in the iframe URL. RapidShift automatically resolves your client account from the API key:",
+        code: `<iframe
+  src="https://rsl.alaqmar.dev/embed/client-dashboard?apiKey=rpk_live_YOUR_UNIVERSAL_API_KEY&theme=dark"
+  width="100%"
+  height="520"
+  style="border: none; border-radius: 16px; overflow: hidden;"
+  loading="lazy"
+></iframe>`,
+        language: "html",
+      },
+      {
+        title: "4. Method C: Direct Client Data REST API (/api/v1/client/data)",
+        description:
+          "Use the exact same Universal API Key to fetch all your client and embed data as JSON (client profile, gate status, billing summary, invoices, payments, contracts, PM2 fleet, domains, support tickets, releases, and visitor analytics):",
+        code: `const res = await fetch("https://rsl.alaqmar.dev/api/v1/client/data", {
+  headers: { "x-api-key": "rpk_live_YOUR_UNIVERSAL_API_KEY" }
+});
+const { data } = await res.json();`,
+        language: "typescript",
       },
     ],
   },
@@ -447,7 +457,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const gate = createGate({
   apiKey: process.env.RAPIDSHIFT_API_KEY!,
-  endpoint: "https://controlplane.rapidshiftlabs.com",
+  apiUrl: process.env.RAPIDSHIFT_API_URL || "https://rsl.alaqmar.dev",
   cacheTtlMs: 60000, // 60s fast in-memory cache
   failOpen: true,     // CRITICAL: Guaranteed fail-open
 });
@@ -600,15 +610,15 @@ export async function middleware(req: NextRequest) {
           "Insert our ultra-lightweight (< 2 KB) tracking tag into your site's root layout:",
         code: `<script 
   defer 
-  src="https://controlplane.rapidshiftlabs.com/t.js" 
-  data-site="YOUR_CLIENT_ID"
+  src="https://rsl.alaqmar.dev/t.js" 
+  data-client="YOUR_CLIENT_ID"
 ></script>`,
         language: "html",
       },
       {
         title: "2. Privacy-Friendly Metrics Captured",
         description:
-          "Tracks pageviews, unique sessions, referrers, device breakdown, and Core Web Vitals (LCP, FID, CLS) without setting cookies or storing personal identifiable information (PII).",
+          "Tracks pageviews, unique sessions, repeat viewer loyalty, user visit history click-paths, referrers, device breakdown, countries, and Core Web Vitals (LCP, INP, CLS, FCP, TTFB) without setting cookies.",
       },
       {
         title: "3. Configure Telemetry Offloading Webhook",
@@ -672,6 +682,12 @@ const WIDGETS_CATALOG = [
     desc: "Complete support desk embed allowing clients to file new tickets with priority tiers, reply to conversation threads, and trigger SLA escalation.",
   },
   {
+    id: "analytics-overview",
+    title: "Analytics & Visitor Intelligence Suite",
+    category: "Analytics",
+    desc: "Traffic chart, repeat visitor loyalty, top pages, referrers, countries, and recent user visit history.",
+  },
+  {
     id: "vault-secret",
     title: "Audited Vault Secret Viewer",
     category: "Security",
@@ -682,15 +698,15 @@ const WIDGETS_CATALOG = [
 export function ResourcesView() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
-  const [expandedRunbookId, setExpandedRunbookId] = useState<string | null>("admin-client-onboarding");
+  const [expandedRunbookId, setExpandedRunbookId] = useState<string | null>("portal-live-embeds");
   const [copiedCodeSnippet, setCopiedCodeSnippet] = useState<string | null>(null);
 
   // Embed Playground State
   const [playgroundWidget, setPlaygroundWidget] = useState<string>("billing-summary");
   const [playgroundTheme, setPlaygroundTheme] = useState<"dark" | "light">("dark");
   const [playgroundAccent, setPlaygroundAccent] = useState<string>("#2563eb");
-  const [playgroundFormat, setPlaygroundFormat] = useState<"script" | "webcomponent" | "iframe">("script");
-  const [playgroundToken, setPlaygroundToken] = useState<string>("emb_sample_token_xyz");
+  const [playgroundFormat, setPlaygroundFormat] = useState<"script" | "webcomponent" | "iframe">("webcomponent");
+  const [playgroundToken, setPlaygroundToken] = useState<string>("rpk_live_YOUR_UNIVERSAL_API_KEY");
 
   const filteredRunbooks = useMemo(() => {
     return RUNBOOKS.filter((rb) => {
@@ -724,14 +740,15 @@ export function ResourcesView() {
 
   // Generate Playground Code Snippet
   const generatedEmbedCode = useMemo(() => {
-    const origin = typeof window !== "undefined" ? window.location.origin : "https://controlplane.rapidshiftlabs.com";
+    const origin = typeof window !== "undefined" ? window.location.origin : "https://rsl.alaqmar.dev";
+    const isApiKey = playgroundToken.startsWith("rpk_") || playgroundToken.startsWith("rsk_");
     if (playgroundFormat === "script") {
-      return `<!-- RapidShift Embed Script (Include Once) -->\n<script src="${origin}/embed.js" async></script>\n\n<!-- Target Live Widget Container -->\n<div\n  data-rsl-widget="${playgroundWidget}"\n  data-rsl-token="${playgroundToken}"\n  data-rsl-theme="${playgroundTheme}"\n  data-rsl-accent="${playgroundAccent}"\n></div>`;
+      return `<!-- RapidShift Embed Script (Include Once) -->\n<script defer src="${origin}/embed.js" data-api-key="${playgroundToken}"></script>\n\n<!-- Target Live Widget Container -->\n<div\n  data-rsl-widget="${playgroundWidget}"\n  ${isApiKey ? `data-rsl-api-key="${playgroundToken}"` : `data-rsl-token="${playgroundToken}"`}\n  data-rsl-theme="${playgroundTheme}"\n  data-rsl-accent="${playgroundAccent}"\n></div>`;
     }
     if (playgroundFormat === "webcomponent") {
-      return `<!-- RapidShift Embed Script -->\n<script src="${origin}/embed.js" async></script>\n\n<!-- Custom Web Component -->\n<rsl-${playgroundWidget}\n  token="${playgroundToken}"\n  theme="${playgroundTheme}"\n  accent="${playgroundAccent}"\n></rsl-${playgroundWidget}>`;
+      return `<!-- RapidShift Embed Script (Works for all 23 widgets!) -->\n<script defer src="${origin}/embed.js" data-api-key="${playgroundToken}"></script>\n\n<!-- Custom Web Component -->\n<rsl-${playgroundWidget}\n  ${isApiKey ? `api-key="${playgroundToken}"` : `token="${playgroundToken}"`}\n  theme="${playgroundTheme}"\n  accent="${playgroundAccent}"\n></rsl-${playgroundWidget}>`;
     }
-    return `<!-- Isolated IFRAME Integration with Auto-Resize -->\n<iframe\n  src="${origin}/embed/${playgroundWidget}?token=${encodeURIComponent(playgroundToken)}&theme=${playgroundTheme}&accent=${encodeURIComponent(playgroundAccent)}"\n  style="width: 100%; border: none; min-height: 480px; border-radius: 16px; overflow: hidden;"\n  loading="lazy"\n></iframe>`;
+    return `<!-- Isolated IFRAME Integration with Auto-Resize -->\n<iframe\n  src="${origin}/embed/${playgroundWidget}?${isApiKey ? "apiKey" : "token"}=${encodeURIComponent(playgroundToken)}&theme=${playgroundTheme}&accent=${encodeURIComponent(playgroundAccent)}"\n  style="width: 100%; border: none; min-height: 480px; border-radius: 16px; overflow: hidden;"\n  loading="lazy"\n></iframe>`;
   }, [playgroundWidget, playgroundTheme, playgroundAccent, playgroundFormat, playgroundToken]);
 
   return (

@@ -9,16 +9,35 @@ import { clearGateCache } from "@/lib/cache/lru-cache";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { token, widget, action, clientId: reqClientId, payload = {} } = body;
+    const {
+      token,
+      apiKey,
+      key,
+      widget,
+      action,
+      clientId: reqClientId,
+      payload = {},
+    } = body;
 
+    const rawCredential = (apiKey || key || token || "").trim();
     const container = getContainer();
     let resolvedClientId = reqClientId;
 
-    // Verify embed token if provided
-    if (token && token.startsWith("emb_")) {
+    // 1. Verify API key (rpk_live_... or rsk_live_...) if provided in body
+    if (rawCredential && (rawCredential.startsWith("rpk_") || rawCredential.startsWith("rsk_"))) {
+      const verifiedKey = await container.apiPlatformModule.validateApiKey(rawCredential);
+      if (!verifiedKey || !verifiedKey.valid || !verifiedKey.clientId) {
+        return NextResponse.json(
+          { error: "Invalid, expired, or revoked API key for embed action" },
+          { status: 401 }
+        );
+      }
+      resolvedClientId = verifiedKey.clientId;
+    } else if (rawCredential && rawCredential.startsWith("emb_")) {
+      // 2. Verify scoped embed token if provided
       try {
         const verified = await container.embeds.verifyEmbedTokenUseCase.execute(
-          token,
+          rawCredential,
           widget || "client-dashboard"
         );
         resolvedClientId = verified.clientId;
@@ -29,7 +48,7 @@ export async function POST(request: NextRequest) {
         );
       }
     } else {
-      // If no embed token, check for an authenticated user session
+      // 3. Fallback: check header API key or authenticated user session
       const sessionActor = await getRequestActor(request);
       if (sessionActor?.kind === "client_user" || sessionActor?.kind === "api_key") {
         resolvedClientId = sessionActor.clientId;
@@ -37,7 +56,7 @@ export async function POST(request: NextRequest) {
         resolvedClientId = reqClientId;
       } else {
         return NextResponse.json(
-          { error: "Unauthorized: Valid embed token or authenticated session required" },
+          { error: "Unauthorized: Valid API key, embed token, or authenticated session required" },
           { status: 401 }
         );
       }

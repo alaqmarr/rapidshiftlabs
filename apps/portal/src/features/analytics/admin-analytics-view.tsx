@@ -576,13 +576,18 @@ export function AnalyticsSuiteDashboard({
   // Origin URL for snippets
   const originUrl =
     typeof window !== "undefined" ? window.location.origin : "https://rsl.alaqmar.dev";
+  const savedUniversalKey =
+    typeof window !== "undefined"
+      ? localStorage.getItem(`rsl_universal_api_key_${selectedClientId}`) || ""
+      : "";
+  const snippetApiKey = savedUniversalKey || "rpk_live_YOUR_UNIVERSAL_API_KEY";
   const trackerSnippet = `<script defer src="${originUrl}/t.js" data-client="${selectedClientId}"></script>`;
   const customEventSnippet = `// Track custom conversions or actions anywhere in your app:\nwindow.rslTrack?.("checkout_completed", { plan: "enterprise", value: 4999 });`;
   const embedUrl = `${originUrl}/embed/${embedWidgetType}?clientId=${encodeURIComponent(
     selectedClientId
-  )}&theme=${embedTheme}&accent=${embedAccent}`;
-  const iframeEmbedSnippet = `<iframe\n  src="${embedUrl}"\n  style="width: 100%; height: 540px; border: 0; border-radius: 16px; overflow: hidden;"\n  loading="lazy"\n  title="RapidShift Analytics - ${activeClientName}"\n></iframe>`;
-  const webComponentSnippet = `<script src="${originUrl}/embed.js" defer></script>\n<rsl-embed widget="${embedWidgetType}" client-id="${selectedClientId}" theme="${embedTheme}" accent="${embedAccent}"></rsl-embed>`;
+  )}${savedUniversalKey ? `&apiKey=${encodeURIComponent(savedUniversalKey)}` : ""}&theme=${embedTheme}&accent=${embedAccent}`;
+  const iframeEmbedSnippet = `<iframe\n  src="${originUrl}/embed/${embedWidgetType}?apiKey=${snippetApiKey}&theme=${embedTheme}&accent=${embedAccent}"\n  style="width: 100%; height: 540px; border: 0; border-radius: 16px; overflow: hidden;"\n  loading="lazy"\n  title="RapidShift Analytics - ${activeClientName}"\n></iframe>`;
+  const webComponentSnippet = `<script src="${originUrl}/embed.js" data-api-key="${snippetApiKey}" defer></script>\n<rsl-embed widget="${embedWidgetType}" api-key="${snippetApiKey}" theme="${embedTheme}" accent="${embedAccent}"></rsl-embed>`;
 
   // Standard 5 Web Vitals lookup
   const vitalSpecs = [

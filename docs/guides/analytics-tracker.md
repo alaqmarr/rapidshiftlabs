@@ -1,46 +1,32 @@
-# Cookieless Analytics Tracker & Offload Guide
+# Cookieless Analytics Tracker, Visitor Intelligence & Offload Guide
 
-RapidShift provides a privacy-first, cookieless analytics solution designed to give both you and your clients deep insight into application traffic, visitor trends, device distribution, and Core Web Vitals without violating GDPR, CCPA, or requiring annoying cookie consent banners.
-
----
-
-## 1. Features & Principles
-
-- **Zero Cookies & LocalStorage**: Visitor identity is hashed using a daily rotating salt combined with client IP and User-Agent. No persistent identifier is written to the visitor's device.
-- **Ultra-lightweight (< 2 KB)**: Loads asynchronously via `sendBeacon` with zero impact on time-to-interactive (TTI) or First Input Delay (FID).
-- **Core Web Vitals Built-in**: Automatically captures Largest Contentful Paint (LCP), Interaction to Next Paint (INP), and Cumulative Layout Shift (CLS).
-- **Automated Retention**: Raw event rows are automatically pruned after 60 days by the background worker, while aggregated daily/hourly metrics are retained permanently.
-- **Client Offloading**: Clients can stream their analytics data directly to their own data warehouse or endpoints via HMAC-signed webhooks or REST pull export.
+RapidShift provides a privacy-first, cookieless analytics and visitor intelligence suite that captures pageviews, click-path session journeys, repeat viewer loyalty, referrers, UTM campaigns, geographic regions, and real Core Web Vitals (LCP, INP, CLS, FCP, TTFB) — without GDPR/CCPA cookie banners.
 
 ---
 
-## 2. Drop-in Installation
+## 1. Drop-In Installation (`t.js`)
 
-Add the tracking script to your application's `<head>` or root layout. Replace `rpk_...` with your client publishable key:
+Add the single `<script>` tag inside your website's `<head>` or root `layout.tsx`:
 
 ```html
-<!-- RapidShift Cookieless Tracker -->
 <script
   defer
-  src="https://api.rapidshiftlabs.com/t.js"
-  data-key="rpk_live_01HQXYZ123456789"
-  data-endpoint="https://api.rapidshiftlabs.com/api/collect"
+  src="https://rsl.alaqmar.dev/t.js"
+  data-client="cli_01M4ZQK3D3EY8WYGS20H5M0D9S"
 ></script>
 ```
 
-### Next.js App Router Integration (`app/layout.tsx`)
+### Next.js App Router (`app/layout.tsx`)
 
 ```tsx
-import Script from "next/script";
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <head>
-        <Script
-          src="https://api.rapidshiftlabs.com/t.js"
-          strategy="afterInteractive"
-          data-key={process.env.NEXT_PUBLIC_RAPIDSHIFT_KEY}
+        <script
+          defer
+          src="https://rsl.alaqmar.dev/t.js"
+          data-client="cli_01M4ZQK3D3EY8WYGS20H5M0D9S"
         />
       </head>
       <body>{children}</body>
@@ -49,67 +35,88 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
+### Domain Portability Note
+`t.js` automatically detects the RapidShift ingest endpoint (`/api/collect`) from its own `<script src="...">` domain. Currently it uses `https://rsl.alaqmar.dev`, and if you ever move RapidShift to another domain in the future, updating the `src` URL is all that is required.
+
+---
+
+## 2. What `t.js` Captures Automatically
+
+1. **Pageviews & SPA Route Transitions**: Hooks into `history.pushState`, `replaceState`, and `popstate` to record every route navigation in Next.js/React/Vue SPAs.
+2. **User Visit History & Session Click-Paths**: Groups pageviews into sessions so you can inspect the exact sequence of pages a visitor viewed (`/` -> `/pricing` -> `/signup`) along with time spent.
+3. **Repeat Viewer Detection**: Uses a privacy-safe first-party visit counter (`rsl_vc`) and rotating visitor hash to distinguish **New Visitors** from **Repeat Viewers (2x, 3x, 5x+)**.
+4. **Acquisition & Geographic Attribution**: Captures external referrers, `utm_source`, `utm_medium`, `utm_campaign`, browser language, screen resolution, and country/region (resolved via CDN geo headers or IANA timezone mapping).
+5. **Real Core Web Vitals**: Observes `largest-contentful-paint` (LCP), `first-input` / `event` (INP), `layout-shift` (CLS), `first-contentful-paint` (FCP), and navigation `responseStart` (TTFB).
+6. **Runtime JS Exceptions**: Captures uncaught `window.onerror` and `unhandledrejection` events for rapid debugging.
+
 ---
 
 ## 3. Custom Event Tracking
 
-In addition to automatic pageviews and web vitals, you can track custom business events from client-side code:
+Track custom conversions, button clicks, or checkout steps from anywhere in your frontend code:
 
 ```typescript
-// Track conversion or custom action
-if (window.rapidshift) {
-  window.rapidshift.track("plan_purchased", {
-    planId: "enterprise-annual",
-    currency: "INR",
-    amount: 150000,
-    tenure: "12_months",
-  });
-}
+// Standard global helper
+window.rslTrack?.("subscription_upgraded", {
+  plan: "enterprise",
+  billingCycle: "annual",
+  valueInr: 49999,
+});
+
+// Alias also supported:
+window.rapidshift?.track("lead_submitted", { source: "pricing_modal" });
 ```
 
 ---
 
-## 4. Analytics Offload & Export
+## 4. Embedding Live Analytics Widgets on Your Site
 
-Clients can offload their analytics data out of RapidShift into their own database or analytics lake (e.g., Snowflake, BigQuery, ClickHouse) through two methods:
+Use your **Universal API Key (`rpk_live_...`)** (generated in `/portal/api-keys` or `/portal/embeds`) to embed live analytics dashboards via Web Components or Iframes without having to mint tokens:
 
-### Method A: HMAC-Signed Webhook Push
+### Option A: Web Component
+```html
+<script
+  defer
+  src="https://rsl.alaqmar.dev/embed.js"
+  data-api-key="rpk_live_YOUR_UNIVERSAL_API_KEY"
+></script>
 
-RapidShift background workers batch events every minute and push them to your configured webhook URL. Every payload includes an HMAC-SHA256 signature in the `X-RapidShift-Signature` header:
-
-```typescript
-// Webhook Receiver Example (Next.js / Express)
-import crypto from "node:crypto";
-
-export async function POST(req: Request) {
-  const signature = req.headers.get("x-rapidshift-signature");
-  const rawBody = await req.text();
-  const webhookSecret = process.env.OFFLOAD_WEBHOOK_SECRET!;
-
-  // 1. Verify HMAC Signature
-  const expectedSignature = crypto
-    .createHmac("sha256", webhookSecret)
-    .update(rawBody)
-    .digest("hex");
-
-  if (signature !== expectedSignature) {
-    return new Response("Invalid signature", { status: 401 });
-  }
-
-  // 2. Process Batched Events
-  const { events } = JSON.parse(rawBody);
-  console.log(`Received batch of ${events.length} analytics events.`);
-
-  // Write into your internal data store...
-  return new Response("OK", { status: 200 });
-}
+<!-- Full Analytics Suite Embed -->
+<rsl-embed widget="analytics-overview" theme="dark" accent="blue"></rsl-embed>
 ```
 
-### Method B: REST Pull Export
+### Option B: Responsive Iframe
+```html
+<iframe
+  src="https://rsl.alaqmar.dev/embed/analytics-overview?apiKey=rpk_live_YOUR_UNIVERSAL_API_KEY&theme=dark&accent=blue"
+  style="width: 100%; height: 540px; border: 0; border-radius: 16px; overflow: hidden;"
+  loading="lazy"
+  title="RapidShift Analytics"
+></iframe>
+```
 
-Pull raw and aggregated events via the export API:
+---
+
+## 5. Querying Analytics via REST API
+
+You can fetch your full analytics suite JSON directly using your Universal API Key:
 
 ```bash
-curl -X GET "https://api.rapidshiftlabs.com/api/v1/analytics/export?limit=500" \
-  -H "Authorization: Bearer rsk_live_01HQXYZ123456789"
+# Via Unified Client Data API
+curl -X GET "https://rsl.alaqmar.dev/api/v1/client/data?include=analytics&days=30" \
+  -H "x-api-key: rpk_live_YOUR_UNIVERSAL_API_KEY"
+
+# Or via Dedicated Analytics Suite Endpoint
+curl -X GET "https://rsl.alaqmar.dev/api/v1/analytics/suite?range=30d" \
+  -H "x-api-key: rpk_live_YOUR_UNIVERSAL_API_KEY"
 ```
+
+---
+
+## 6. Analytics Offload (HMAC-Signed Webhook Push & Pull Export)
+
+Clients can stream raw analytics events to their own data warehouse (BigQuery, ClickHouse, Snowflake, or custom HTTP receiver):
+
+1. Configure your **Destination Webhook URL** and **HMAC Verification Secret** in **Analytics -> Embeds & Tracker**.
+2. Every batch pushed by RapidShift includes an `X-RapidShift-Signature` HMAC-SHA256 header.
+3. Or pull raw events on demand via `GET https://rsl.alaqmar.dev/api/v1/analytics/export?limit=500` with `Authorization: Bearer rsk_live_...`.

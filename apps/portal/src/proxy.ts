@@ -10,6 +10,7 @@ const PUBLIC_PATH_PATTERNS = [
   /^\/api\/v1\/health$/,
   /^\/api\/v1\/access\/status$/,
   /^\/api\/v1\/embed-actions$/,
+  /^\/api\/v1\/client\/data$/,
   /^\/api\/collect/,
   /^\/api\/stream/,
   /^\/\.well-known/,
@@ -173,7 +174,15 @@ export default async function proxy(req: NextRequest) {
   }
 
   if (pathname.startsWith("/api/v1/portal")) {
-    const authHeader = req.headers.get("authorization") || req.headers.get("x-api-key") || "";
+    const authHeader =
+      req.headers.get("authorization") ||
+      req.headers.get("x-api-key") ||
+      req.headers.get("x-publishable-key") ||
+      req.nextUrl.searchParams.get("apiKey") ||
+      req.nextUrl.searchParams.get("api_key") ||
+      req.nextUrl.searchParams.get("key") ||
+      req.nextUrl.searchParams.get("token") ||
+      "";
     const hasApiKeyHeader =
       authHeader.startsWith("rsk_") ||
       authHeader.startsWith("rpk_") ||

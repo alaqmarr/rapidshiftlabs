@@ -38,9 +38,9 @@ The primary gateway function used inside Next.js `proxy.ts` or `middleware.ts`.
 
 ```typescript
 export interface GateOptions {
-  /** Secret API Key issued in the RapidShift portal (rsk_...) */
+  /** Secret or Universal API Key issued in the RapidShift portal (rsk_... or rpk_...) */
   apiKey: string;
-  /** RapidShift Control Plane API URL (default: https://api.rapidshiftlabs.com) */
+  /** RapidShift Control Plane API URL (default: https://rsl.alaqmar.dev) */
   apiUrl?: string;
   /** Full URL to redirect users when access is blocked due to unpaid dues */
   blockedRedirectUrl?: string;
@@ -60,7 +60,8 @@ export interface GateOptions {
 ```typescript
 const gate = createGate({
   apiKey: process.env.RAPIDSHIFT_API_KEY!,
-  blockedRedirectUrl: "https://app.rapidshiftlabs.com/portal/billing",
+  apiUrl: process.env.RAPIDSHIFT_API_URL || "https://rsl.alaqmar.dev",
+  blockedRedirectUrl: "https://rsl.alaqmar.dev/portal/billing",
 });
 
 const result = await gate.evaluate(request);
@@ -92,7 +93,8 @@ const app = express();
 app.use(
   createExpressGate({
     apiKey: process.env.RAPIDSHIFT_API_KEY!,
-    blockedRedirectUrl: "https://app.rapidshiftlabs.com/portal/billing",
+    apiUrl: process.env.RAPIDSHIFT_API_URL || "https://rsl.alaqmar.dev",
+    blockedRedirectUrl: "https://rsl.alaqmar.dev/portal/billing",
     failOpen: true,
   })
 );
@@ -113,7 +115,7 @@ import { RapidShiftClient } from "@rapidshift/sdk";
 
 const client = new RapidShiftClient({
   apiKey: "rsk_live_01HQXYZ123456789",
-  baseUrl: "https://api.rapidshiftlabs.com",
+  baseUrl: process.env.RAPIDSHIFT_API_URL || "https://rsl.alaqmar.dev",
   timeoutMs: 2000,
 });
 

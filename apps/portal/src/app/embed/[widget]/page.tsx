@@ -9,6 +9,9 @@ interface EmbedPageProps {
   params: Promise<{ widget: string }>;
   searchParams: Promise<{
     token?: string;
+    apiKey?: string;
+    api_key?: string;
+    key?: string;
     clientId?: string;
     theme?: string;
     accent?: string;
@@ -35,7 +38,13 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
   const { widget } = await params;
   const query = await searchParams;
 
-  const token = query.token || "";
+  const rawCredential = (
+    query.apiKey ||
+    query.api_key ||
+    query.key ||
+    query.token ||
+    ""
+  ).trim();
   const requestedClientId = query.clientId || "";
   const isDark = query.theme !== "light";
   const accent = query.accent || "#2563eb";
@@ -44,16 +53,34 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
   let resolvedClientId = requestedClientId;
   let authError: string | null = null;
 
-  // Verify embed token or resolve client
-  if (token) {
-    try {
-      const verified = await container.embeds.verifyEmbedTokenUseCase.execute(
-        token,
-        widget || "client-dashboard"
-      );
-      resolvedClientId = verified.clientId;
-    } catch (err: any) {
-      authError = err?.message || "Invalid or expired embed token";
+  // 1. Verify API Key (rpk_live_... or rsk_live_...) OR Scoped Embed Token (emb_...)
+  if (rawCredential) {
+    if (rawCredential.startsWith("rpk_") || rawCredential.startsWith("rsk_")) {
+      try {
+        const verifiedKey = await container.apiPlatformModule.validateApiKey(rawCredential);
+        if (verifiedKey && verifiedKey.valid && verifiedKey.clientId) {
+          resolvedClientId = verifiedKey.clientId;
+        } else {
+          authError =
+            verifiedKey?.error === "key_revoked"
+              ? "This API key has been revoked."
+              : verifiedKey?.error === "key_expired"
+              ? "This API key has expired."
+              : "Invalid API key provided for embed.";
+        }
+      } catch (err: any) {
+        authError = err?.message || "Failed to validate API key";
+      }
+    } else if (rawCredential.startsWith("emb_")) {
+      try {
+        const verified = await container.embeds.verifyEmbedTokenUseCase.execute(
+          rawCredential,
+          widget || "client-dashboard"
+        );
+        resolvedClientId = verified.clientId;
+      } catch (err: any) {
+        authError = err?.message || "Invalid or expired embed token";
+      }
     }
   }
 
@@ -100,7 +127,7 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
             <p className="text-xs text-slate-400 mt-1">{authError}</p>
           </div>
           <p className="text-[11px] text-slate-500">
-            Please verify the embed token from the client portal or mint a new one with required permissions.
+            Generate a permanent Universal API Key (<code className="font-mono">rpk_live_...</code>) in the Client Portal or Embed Studio to authorize all embeds without token expiry.
           </p>
         </div>
       </div>
@@ -279,7 +306,7 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
       widgetDescription={widgetDef.description}
       clientId={resolvedClientId || "preview"}
       clientName={clientName}
-      token={token}
+      token={rawCredential}
       isDark={isDark}
       accent={accent}
       initialData={{

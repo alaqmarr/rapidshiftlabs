@@ -6,8 +6,7 @@ import {
   Code2,
   Copy,
   Check,
-  Layers,
-  Palette,
+  Key,
   Eye,
   RefreshCw,
   Sparkles,
@@ -23,6 +22,8 @@ import {
 } from "lucide-react";
 import { useAlert } from "@/components/ui/alert-popup";
 import { IosSpinner } from "@/components/ui/ios-spinner";
+import { getSiteOrigin } from "@/lib/site-url";
+import { ALL_UNIVERSAL_SCOPES } from "@/features/portal/portal-api-keys-view";
 import type { WidgetCatalogItem } from "./embed-studio";
 
 interface PortalEmbedsViewProps {
@@ -36,13 +37,17 @@ export function PortalEmbedsView({
   clientName,
   widgets,
 }: PortalEmbedsViewProps) {
-  const { showSuccess } = useAlert();
+  const { showSuccess, showError } = useAlert();
   const [selectedWidgetName, setSelectedWidgetName] = useState(
     widgets[0]?.name || "billing-summary"
   );
   const [theme, setTheme] = useState<"light" | "dark" | "system">("light");
-  const [embedType, setEmbedType] = useState<"webcomponent" | "iframe">("webcomponent");
+  const [embedType, setEmbedType] = useState<"webcomponent" | "iframe" | "api">("webcomponent");
+  const [authMode, setAuthMode] = useState<"apikey" | "token">("apikey");
   const [activeTab, setActiveTab] = useState<"preview" | "code">("preview");
+
+  const [universalApiKey, setUniversalApiKey] = useState<string>("");
+  const [generatingKey, setGeneratingKey] = useState(false);
 
   const [activeToken, setActiveToken] = useState<string>("");
   const [mintingToken, setMintingToken] = useState(false);
@@ -50,6 +55,15 @@ export function PortalEmbedsView({
 
   const selectedWidget =
     widgets.find((w) => w.name === selectedWidgetName) || widgets[0];
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`rsl_universal_api_key_${clientId}`);
+      if (saved) setUniversalApiKey(saved);
+    } catch {
+      // ignore
+    }
+  }, [clientId]);
 
   const getWidgetCategoryIcon = (name: string) => {
     if (name.includes("due") || name.includes("billing") || name.includes("invoice") || name.includes("payment")) {
@@ -64,13 +78,53 @@ export function PortalEmbedsView({
     if (name.includes("support") || name.includes("ticket") || name.includes("sla")) {
       return LifeBuoy;
     }
-    if (name.includes("pageviews") || name.includes("vitals") || name.includes("visitor") || name.includes("top-pages")) {
+    if (name.includes("pageviews") || name.includes("vitals") || name.includes("visitor") || name.includes("top-pages") || name.includes("analytics")) {
       return BarChart3;
     }
     if (name.includes("release")) {
       return Rocket;
     }
     return LayoutDashboard;
+  };
+
+  const handleGenerateUniversalKey = async () => {
+    try {
+      setGeneratingKey(true);
+      const res = await fetch("/api/v1/portal/api-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId,
+          name: "Universal Embed & Client API Key",
+          type: "publishable",
+          scopes: [...ALL_UNIVERSAL_SCOPES],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.rawKey) {
+        throw new Error(data.error || "Failed to generate API key");
+      }
+      setUniversalApiKey(data.rawKey);
+      setAuthMode("apikey");
+      try {
+        localStorage.setItem(`rsl_universal_api_key_${clientId}`, data.rawKey);
+      } catch {
+        // ignore
+      }
+      showSuccess(
+        "Universal API Key Generated",
+        "Your permanent API key is now active across all 23 embeds (Web Components & Iframes) and the Client Data API. No more 15-minute token minting needed!",
+        [
+          { label: "Universal API Key", value: data.rawKey, copyable: true, isMonospace: true },
+          { label: "Client Account", value: clientId },
+        ],
+        data.rawKey
+      );
+    } catch (err: any) {
+      showError("API Key Error", err.message || "Failed to generate API key");
+    } finally {
+      setGeneratingKey(false);
+    }
   };
 
   const handleMintToken = async () => {
@@ -132,18 +186,40 @@ export function PortalEmbedsView({
     };
   }, [clientId, selectedWidgetName, selectedWidget?.requiredScopes]);
 
-  const origin = typeof window !== "undefined" ? window.location.origin : "https://rapidshiftlabs.com";
+  const origin = getSiteOrigin();
+  const displayApiKey = universalApiKey || "rpk_live_YOUR_UNIVERSAL_API_KEY";
 
-  const webComponentSnippet = `<!-- 1. RapidShift Embed Runtime (Place once in your page) -->
+  const webComponentSnippet =
+    authMode === "apikey"
+      ? `<!-- 1. RapidShift Embed Runtime (Place once in your page — works for all 23 widgets!) -->
+<script defer src="${origin}/embed.js" data-api-key="${displayApiKey}"></script>
+
+<!-- 2. ${selectedWidget?.title || "Embed Widget"} (Permanent API Key — No Token Minting Needed) -->
+<${selectedWidget?.tag || "rsl-widget"}
+  api-key="${displayApiKey}"
+  theme="${theme}"
+></${selectedWidget?.tag || "rsl-widget"}>`
+      : `<!-- 1. RapidShift Embed Runtime (Place once in your page) -->
 <script defer src="${origin}/embed.js"></script>
 
-<!-- 2. ${selectedWidget?.title || "Embed Widget"} -->
+<!-- 2. ${selectedWidget?.title || "Embed Widget"} (15-Minute Scoped Token) -->
 <${selectedWidget?.tag || "rsl-widget"}
   client-id="${clientId}"
   theme="${theme}"${activeToken ? `\n  token="${activeToken}"` : ""}
 ></${selectedWidget?.tag || "rsl-widget"}>`;
 
-  const iframeSnippet = `<!-- RapidShift Embed: ${selectedWidget?.title || "Widget"} (Zero JS Dependency) -->
+  const iframeSnippet =
+    authMode === "apikey"
+      ? `<!-- RapidShift Embed: ${selectedWidget?.title || "Widget"} (Permanent API Key — Zero JS Dependency) -->
+<iframe
+  src="${origin}/embed/${selectedWidget?.name}?apiKey=${displayApiKey}&theme=${theme}"
+  width="100%"
+  height="450"
+  frameborder="0"
+  style="border-radius: 12px; border: 1px solid #e4e4e7; width: 100%; min-height: 400px;"
+  loading="lazy"
+></iframe>`
+      : `<!-- RapidShift Embed: ${selectedWidget?.title || "Widget"} (15-Minute Token) -->
 <iframe
   src="${origin}/embed/${selectedWidget?.name}?clientId=${clientId}&theme=${theme}${activeToken ? `&token=${activeToken}` : ""}"
   width="100%"
@@ -153,18 +229,35 @@ export function PortalEmbedsView({
   loading="lazy"
 ></iframe>`;
 
-  const currentSnippet = embedType === "webcomponent" ? webComponentSnippet : iframeSnippet;
+  const apiSnippet = `// Fetch all client & embed data directly via REST API using the same Universal API Key
+const response = await fetch("${origin}/api/v1/client/data?include=client,gate,billing,invoices,fleet,domains,tickets,releases,analytics", {
+  headers: {
+    "x-api-key": "${displayApiKey}"
+  }
+});
+const { data } = await response.json();
+console.log("Client Data:", data);`;
+
+  const currentSnippet =
+    embedType === "webcomponent"
+      ? webComponentSnippet
+      : embedType === "iframe"
+        ? iframeSnippet
+        : apiSnippet;
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(currentSnippet);
     setCopiedCode(true);
-    showSuccess("Snippet Copied", "Embed code copied to clipboard.");
+    showSuccess("Snippet Copied", "Integration snippet copied to clipboard.");
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
-  const previewUrl = `/embed/${selectedWidget?.name}?clientId=${clientId}&theme=${theme}${
-    activeToken ? `&token=${activeToken}` : ""
-  }`;
+  const previewUrl =
+    authMode === "apikey" && universalApiKey
+      ? `/embed/${selectedWidget?.name}?apiKey=${universalApiKey}&theme=${theme}`
+      : `/embed/${selectedWidget?.name}?clientId=${clientId}&theme=${theme}${
+          activeToken ? `&token=${activeToken}` : ""
+        }`;
 
   return (
     <div className="space-y-6">
@@ -174,46 +267,122 @@ export function PortalEmbedsView({
           <div className="space-y-2">
             <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-400 dark:border-indigo-800">
               <Code2 className="w-3.5 h-3.5" />
-              <span>Embeddable Components</span>
+              <span>Embeddable Components &bull; Universal API Key Ready</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-zinc-900 dark:text-white">
               Embed Studio &bull; {clientName}
             </h1>
             <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-2xl">
-              Embed live billing summaries, server uptime, support ticket submitters, and performance analytics directly inside your web application or internal intranet.
+              Generate one permanent Universal API Key (<code className="font-mono text-indigo-600 dark:text-indigo-400">rpk_live_...</code>) and use it across all 23 Web Components, Iframes, and the Client Data API without ever having to mint short-lived tokens again.
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <Link
-              href="/resources#embed-playground"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-blue-600 hover:bg-blue-500 text-white shadow-xs transition"
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>Embeds Masterclass</span>
-            </Link>
-
+          <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={handleMintToken}
-              disabled={mintingToken}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 transition"
-              title="Mint new 15-minute scoped token"
+              onClick={handleGenerateUniversalKey}
+              disabled={generatingKey}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition cursor-pointer disabled:opacity-50"
             >
-              {mintingToken ? (
+              {generatingKey ? (
                 <IosSpinner size="xs" className="text-current" />
               ) : (
-                <RefreshCw className="w-3.5 h-3.5" />
+                <Sparkles className="w-3.5 h-3.5" />
               )}
-              <span>Refresh Token</span>
+              <span>{universalApiKey ? "Regenerate Universal API Key" : "Generate Universal API Key"}</span>
             </button>
+
+            <Link
+              href="/resources#embed-playground"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 transition"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Docs &amp; Guide</span>
+            </Link>
           </div>
         </div>
       </section>
 
       {/* Main Studio Split Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Widget Selector & Theme Controls (4 cols) */}
+        {/* Left Column: Auth Mode, Widget Selector & Theme Controls (4 cols) */}
         <div className="lg:col-span-4 space-y-5">
+          {/* Authentication Mode Card */}
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
+                <Key className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Embed Authentication</span>
+              </label>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+                {authMode === "apikey" ? "Permanent Key" : "15m Token"}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setAuthMode("apikey")}
+                className={`py-2 px-2.5 text-xs font-semibold rounded-xl border transition cursor-pointer ${
+                  authMode === "apikey"
+                    ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                    : "bg-zinc-50 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700"
+                }`}
+              >
+                Universal API Key
+              </button>
+              <button
+                onClick={() => setAuthMode("token")}
+                className={`py-2 px-2.5 text-xs font-semibold rounded-xl border transition cursor-pointer ${
+                  authMode === "token"
+                    ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                    : "bg-zinc-50 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700"
+                }`}
+              >
+                15m Scoped Token
+              </button>
+            </div>
+
+            {authMode === "apikey" ? (
+              <div className="space-y-2 pt-1">
+                <input
+                  type="text"
+                  value={universalApiKey}
+                  onChange={(e) => {
+                    setUniversalApiKey(e.target.value);
+                    try {
+                      localStorage.setItem(`rsl_universal_api_key_${clientId}`, e.target.value);
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                  placeholder="Paste rpk_live_... or click Generate below"
+                  className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                />
+                <button
+                  onClick={handleGenerateUniversalKey}
+                  disabled={generatingKey}
+                  className="w-full py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>{generatingKey ? "Generating..." : "1-Click Generate Universal API Key"}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[11px] font-mono text-zinc-500 truncate max-w-[180px]">
+                  {activeToken || "Minting..."}
+                </span>
+                <button
+                  onClick={handleMintToken}
+                  disabled={mintingToken}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 cursor-pointer"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Mint 15m Token</span>
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Theme & Format Controls */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-4">
             <div>
@@ -241,7 +410,7 @@ export function PortalEmbedsView({
               <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-2">
                 Integration Format
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   onClick={() => setEmbedType("webcomponent")}
                   className={`py-1.5 text-xs font-semibold rounded-lg border transition ${
@@ -260,7 +429,20 @@ export function PortalEmbedsView({
                       : "bg-zinc-50 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100"
                   }`}
                 >
-                  Iframe Fallback
+                  Iframe
+                </button>
+                <button
+                  onClick={() => {
+                    setEmbedType("api");
+                    setActiveTab("code");
+                  }}
+                  className={`py-1.5 text-xs font-semibold rounded-lg border transition ${
+                    embedType === "api"
+                      ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                      : "bg-zinc-50 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100"
+                  }`}
+                >
+                  Data API
                 </button>
               </div>
             </div>
@@ -351,9 +533,9 @@ export function PortalEmbedsView({
               <div className="flex items-center justify-between text-xs text-zinc-400 border-b border-zinc-100 dark:border-zinc-800 pb-3">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                  Sandbox Viewport &bull; Shadow DOM Isolated
+                  Sandbox Viewport &bull; Works via Web Component or Iframe
                 </span>
-                <span className="font-mono text-[11px]">{previewUrl}</span>
+                <span className="font-mono text-[11px] truncate max-w-[360px]">{previewUrl}</span>
               </div>
 
               {/* Iframe Preview Container */}
@@ -370,10 +552,12 @@ export function PortalEmbedsView({
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-zinc-900 dark:text-white">
-                    Copyable Embed Code
+                    Copyable {embedType === "webcomponent" ? "Web Component" : embedType === "iframe" ? "Iframe" : "Client Data REST API"} Code
                   </h3>
                   <p className="text-xs text-zinc-500 mt-0.5">
-                    Drop this snippet into any web page or layout to render the live widget.
+                    {authMode === "apikey"
+                      ? "Powered by your permanent Universal API Key — works across all 23 embeds and APIs without token expiration."
+                      : "Powered by a 15-minute scoped embed token."}
                   </p>
                 </div>
 
@@ -404,10 +588,10 @@ export function PortalEmbedsView({
               <div className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-600 dark:text-zinc-400 space-y-2">
                 <div className="font-bold text-zinc-900 dark:text-white flex items-center gap-1.5">
                   <ShieldCheck className="w-4 h-4 text-emerald-500" />
-                  <span>Client-Scoped Security</span>
+                  <span>Universal API Key &amp; Domain Portability</span>
                 </div>
                 <p>
-                  Embed tokens are short-lived (15 minutes) and scoped strictly to your account (<code className="font-mono text-indigo-600">{clientId}</code>). They safely render your data without exposing admin credentials.
+                  Your Universal API Key (<code className="font-mono text-indigo-600">rpk_live_...</code>) automatically resolves your client account (<code className="font-mono text-indigo-600">{clientId}</code>) for both Web Components and Iframes, as well as <code className="font-mono text-indigo-600">GET {origin}/api/v1/client/data</code>.
                 </p>
               </div>
             </div>

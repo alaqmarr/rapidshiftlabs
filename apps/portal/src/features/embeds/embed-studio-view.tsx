@@ -1,19 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Code2,
   Copy,
   Layout,
   ExternalLink,
-  ShieldCheck,
-  CheckCircle2,
   Sparkles,
-  Smartphone,
-  Monitor,
   RefreshCw,
+  Key,
 } from "lucide-react";
 import { useAlert } from "@/components/ui/alert-popup";
+import { getSiteOrigin } from "@/lib/site-url";
+import { ALL_UNIVERSAL_SCOPES } from "@/features/portal/portal-api-keys-view";
 
 export interface ClientOption {
   id: string;
@@ -26,7 +25,7 @@ export interface WidgetItem {
   tag: string;
   title: string;
   description: string;
-  category: "billing" | "fleet" | "monitoring" | "support" | "releases" | "dashboard";
+  category: "billing" | "fleet" | "monitoring" | "support" | "releases" | "dashboard" | "analytics";
   requiredScopes?: string[];
 }
 
@@ -80,6 +79,14 @@ const AVAILABLE_WIDGETS: WidgetItem[] = [
     category: "support",
   },
   {
+    id: "analytics-overview",
+    name: "analytics-overview",
+    tag: "rsl-analytics-overview",
+    title: "Analytics & Visitor Suite",
+    description: "Traffic overview, repeat visitor rate, top pages, referrers, and recent journeys.",
+    category: "analytics",
+  },
+  {
     id: "release-list",
     name: "release-list",
     tag: "rsl-release-list",
@@ -114,12 +121,65 @@ export function EmbedStudioView({
     defaultClientId || clients[0]?.id || ""
   );
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [authMode, setAuthMode] = useState<"apikey" | "token">("apikey");
+  const [universalApiKey, setUniversalApiKey] = useState<string>("");
+  const [generatingKey, setGeneratingKey] = useState<boolean>(false);
   const [mintedToken, setMintedToken] = useState<string>("");
   const [minting, setMinting] = useState<boolean>(false);
   const [tokenDurationDays, setTokenDurationDays] = useState<number>(30);
   const [previewKey, setPreviewKey] = useState<number>(0);
 
-  const origin = typeof window !== "undefined" ? window.location.origin : "https://rapidshiftlabs.com";
+  const origin = getSiteOrigin();
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`rsl_universal_api_key_${selectedClientId}`);
+      setUniversalApiKey(saved || "");
+    } catch {
+      // ignore
+    }
+  }, [selectedClientId]);
+
+  const handleGenerateUniversalKey = async () => {
+    try {
+      setGeneratingKey(true);
+      const res = await fetch("/api/v1/portal/api-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: selectedClientId,
+          name: "Universal Embed & Client API Key",
+          type: "publishable",
+          scopes: [...ALL_UNIVERSAL_SCOPES],
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.rawKey) {
+        throw new Error(json.error || "Failed to generate Universal API Key");
+      }
+      setUniversalApiKey(json.rawKey);
+      setAuthMode("apikey");
+      setPreviewKey((k) => k + 1);
+      try {
+        localStorage.setItem(`rsl_universal_api_key_${selectedClientId}`, json.rawKey);
+      } catch {
+        // ignore
+      }
+      showSuccess(
+        "Universal API Key Generated",
+        "Use this single permanent API key across all 23 Web Components, Iframes, and the Client Data API without ever having to mint tokens.",
+        [
+          { label: "Universal API Key", value: json.rawKey, copyable: true, isMonospace: true },
+          { label: "Target Account", value: selectedClientId },
+        ],
+        json.rawKey
+      );
+    } catch (err: any) {
+      showError("API Key Error", err.message || "Failed to generate API key.");
+    } finally {
+      setGeneratingKey(false);
+    }
+  };
 
   const handleMintToken = async () => {
     try {
@@ -131,7 +191,7 @@ export function EmbedStudioView({
           clientId: selectedClientId,
           scopes: selectedWidget.requiredScopes?.length
             ? selectedWidget.requiredScopes
-            : ["billing:read", "fleet:read", "monitoring:read", "support:read", "releases:read"],
+            : ["billing:read", "fleet:read", "monitoring:read", "support:read", "releases:read", "analytics:read"],
           ttlMs: tokenDurationDays * 86400000,
         }),
       });
@@ -161,19 +221,41 @@ export function EmbedStudioView({
     }
   };
 
-  const previewUrl = `${origin}/embed/${selectedWidget.name}?clientId=${selectedClientId}&theme=${theme}${
-    mintedToken ? `&token=${mintedToken}` : ""
-  }`;
+  const displayApiKey = universalApiKey || "rpk_live_YOUR_UNIVERSAL_API_KEY";
 
-  const webComponentSnippet = `<!-- 1. Include RapidShift Embed Runtime in <head> -->
+  const previewUrl =
+    authMode === "apikey" && universalApiKey
+      ? `${origin}/embed/${selectedWidget.name}?apiKey=${universalApiKey}&theme=${theme}`
+      : `${origin}/embed/${selectedWidget.name}?clientId=${selectedClientId}&theme=${theme}${
+          mintedToken ? `&token=${mintedToken}` : ""
+        }`;
+
+  const webComponentSnippet =
+    authMode === "apikey"
+      ? `<!-- 1. Include RapidShift Embed Runtime in <head> (Works for all 23 widgets) -->
+<script defer src="${origin}/embed.js" data-api-key="${displayApiKey}"></script>
+
+<!-- 2. Place Web Component anywhere on your page (Permanent API Key — No Token Minting Needed) -->
+<${selectedWidget.tag} api-key="${displayApiKey}" theme="${theme}"></${selectedWidget.tag}>`
+      : `<!-- 1. Include RapidShift Embed Runtime in <head> -->
 <script defer src="${origin}/embed.js"></script>
 
 <!-- 2. Place Web Component anywhere on your page -->
 <${selectedWidget.tag} client="${selectedClientId}"${
-    mintedToken ? ` token="${mintedToken}"` : ""
-  } theme="${theme}"></${selectedWidget.tag}>`;
+          mintedToken ? ` token="${mintedToken}"` : ""
+        } theme="${theme}"></${selectedWidget.tag}>`;
 
-  const iframeSnippet = `<iframe
+  const iframeSnippet =
+    authMode === "apikey"
+      ? `<iframe
+  src="${origin}/embed/${selectedWidget.name}?apiKey=${displayApiKey}&theme=${theme}"
+  width="100%"
+  height="460"
+  style="border: none; border-radius: 16px; overflow: hidden;"
+  loading="lazy"
+  title="${selectedWidget.title}">
+</iframe>`
+      : `<iframe
   src="${previewUrl}"
   width="100%"
   height="460"
@@ -181,6 +263,12 @@ export function EmbedStudioView({
   loading="lazy"
   title="${selectedWidget.title}">
 </iframe>`;
+
+  const restApiSnippet = `// Fetch all client & embed data directly via REST API using your Universal API Key
+const res = await fetch("${origin}/api/v1/client/data?include=client,gate,billing,invoices,fleet,domains,tickets,releases,analytics", {
+  headers: { "x-api-key": "${displayApiKey}" }
+});
+const { data } = await res.json();`;
 
   return (
     <div className="space-y-6">
@@ -190,36 +278,47 @@ export function EmbedStudioView({
           <div className="space-y-1">
             <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/40 dark:text-blue-400 dark:border-blue-800">
               <Sparkles className="w-3.5 h-3.5" />
-              <span className="steel-pill">Zero-Code Embed Studio</span>
+              <span className="steel-pill">Zero-Code Embed Studio &bull; Universal API Key</span>
             </div>
             <h1 className="text-fluid-title steel-heading text-zinc-900 dark:text-white">
               Embeddable Component Studio
             </h1>
             <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-3xl font-sans">
-              Embed live billing summaries, overdue banners, PM2 server restart buttons, domain uptime indicators, and 24×7 support desks directly into your external app or dashboard with copy-paste code.
+              Generate one permanent Universal API Key (<code className="font-mono text-blue-600 dark:text-blue-400">rpk_live_...</code>) and use it across all Web Components, Iframes, and the Client Data API without needing to mint tokens each time.
             </p>
           </div>
 
-          {!isClientPortal && (
-            <div className="flex items-center gap-3">
-              <label className="steel-metric-label text-zinc-500">Target Client:</label>
-              <select
-                value={selectedClientId}
-                onChange={(e) => {
-                  setSelectedClientId(e.target.value);
-                  setMintedToken("");
-                  setPreviewKey((k) => k + 1);
-                }}
-                className="px-3 py-2 text-xs font-semibold rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 font-tech"
-              >
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.id})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div className="flex flex-wrap items-center gap-3">
+            {!isClientPortal && (
+              <div className="flex items-center gap-2">
+                <label className="steel-metric-label text-zinc-500">Target Client:</label>
+                <select
+                  value={selectedClientId}
+                  onChange={(e) => {
+                    setSelectedClientId(e.target.value);
+                    setMintedToken("");
+                    setPreviewKey((k) => k + 1);
+                  }}
+                  className="px-3 py-2 text-xs font-semibold rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 font-tech"
+                >
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <button
+              onClick={handleGenerateUniversalKey}
+              disabled={generatingKey}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-500 text-white shadow-sm transition cursor-pointer disabled:opacity-50"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{generatingKey ? "Generating..." : "1-Click Universal API Key"}</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -227,6 +326,94 @@ export function EmbedStudioView({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Widget Selector & Options */}
         <div className="lg:col-span-4 space-y-4">
+          {/* Authentication Mode */}
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-3">
+            <h3 className="steel-metric-label text-zinc-900 dark:text-white flex items-center gap-1.5">
+              <Key className="w-3.5 h-3.5 text-blue-600" />
+              <span>Authentication Method</span>
+            </h3>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setAuthMode("apikey")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+                  authMode === "apikey"
+                    ? "border-blue-600 bg-blue-600 text-white shadow-xs"
+                    : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                Universal API Key
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuthMode("token")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+                  authMode === "token"
+                    ? "border-blue-600 bg-blue-600 text-white shadow-xs"
+                    : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                Scoped Token (emb_)
+              </button>
+            </div>
+
+            {authMode === "apikey" ? (
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={universalApiKey}
+                  onChange={(e) => {
+                    setUniversalApiKey(e.target.value);
+                    try {
+                      localStorage.setItem(`rsl_universal_api_key_${selectedClientId}`, e.target.value);
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                  placeholder="rpk_live_... (or click Generate)"
+                  className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800"
+                />
+                <button
+                  type="button"
+                  onClick={handleGenerateUniversalKey}
+                  disabled={generatingKey}
+                  className="w-full py-1.5 px-3 rounded-lg bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-semibold transition cursor-pointer"
+                >
+                  {generatingKey ? "Generating..." : "Generate Universal API Key"}
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={tokenDurationDays}
+                    onChange={(e) => setTokenDurationDays(Number(e.target.value))}
+                    className="px-2 py-1.5 text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 font-tech flex-1"
+                  >
+                    <option value={7}>7 Days Validity</option>
+                    <option value={30}>30 Days Validity</option>
+                    <option value={90}>90 Days Validity</option>
+                    <option value={365}>1 Year Validity</option>
+                  </select>
+
+                  <button
+                    onClick={handleMintToken}
+                    disabled={minting}
+                    className="px-3 py-1.5 text-xs rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow-sm transition disabled:opacity-50"
+                  >
+                    {minting ? "Minting..." : "Mint Token"}
+                  </button>
+                </div>
+                {mintedToken && (
+                  <div className="mt-2 font-tech text-[11px] text-emerald-600 dark:text-emerald-400 truncate">
+                    Token: {mintedToken}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-3">
             <h2 className="steel-heading text-sm text-zinc-900 dark:text-white flex items-center gap-2">
               <Layout className="w-4 h-4 text-blue-600" />
@@ -266,16 +453,13 @@ export function EmbedStudioView({
             </div>
           </div>
 
-          {/* Theme & Token Settings */}
+          {/* Theme Settings */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-4">
             <h3 className="steel-metric-label text-zinc-900 dark:text-white">
-              Widget Configuration
+              Widget Theme
             </h3>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-600 dark:text-zinc-400 mb-1.5">
-                Color Scheme
-              </label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -306,37 +490,6 @@ export function EmbedStudioView({
                   Light Mode
                 </button>
               </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-zinc-600 dark:text-zinc-400 mb-1.5">
-                Token Authentication
-              </label>
-              <div className="flex items-center gap-2">
-                <select
-                  value={tokenDurationDays}
-                  onChange={(e) => setTokenDurationDays(Number(e.target.value))}
-                  className="px-2 py-1.5 text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 font-tech flex-1"
-                >
-                  <option value={7}>7 Days Validity</option>
-                  <option value={30}>30 Days Validity</option>
-                  <option value={90}>90 Days Validity</option>
-                  <option value={365}>1 Year Validity</option>
-                </select>
-
-                <button
-                  onClick={handleMintToken}
-                  disabled={minting}
-                  className="px-3 py-1.5 text-xs rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow-sm transition disabled:opacity-50"
-                >
-                  {minting ? "Minting..." : "Mint Token"}
-                </button>
-              </div>
-              {mintedToken && (
-                <div className="mt-2 font-tech text-[11px] text-emerald-600 dark:text-emerald-400 truncate">
-                  Token: {mintedToken}
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -433,6 +586,31 @@ export function EmbedStudioView({
               </div>
               <pre className="p-3 rounded-xl bg-zinc-950 text-emerald-300 font-tech text-xs overflow-x-auto border border-zinc-800">
                 <code>{iframeSnippet}</code>
+              </pre>
+            </div>
+
+            {/* Snippet 3: Client Data REST API */}
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Code2 className="w-4 h-4 text-indigo-600" />
+                  <span className="font-steel font-bold text-xs text-zinc-900 dark:text-white">
+                    Method 3: Direct Client Data REST API (GET /api/v1/client/data)
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(restApiSnippet);
+                    showSuccess("Copied", "Client Data REST API snippet copied to clipboard.");
+                  }}
+                  className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 text-zinc-800 dark:text-zinc-200 text-xs font-semibold transition"
+                >
+                  <Copy className="w-3 h-3" />
+                  <span className="font-tech">Copy API Call</span>
+                </button>
+              </div>
+              <pre className="p-3 rounded-xl bg-zinc-950 text-indigo-300 font-tech text-xs overflow-x-auto border border-zinc-800">
+                <code>{restApiSnippet}</code>
               </pre>
             </div>
           </div>

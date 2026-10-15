@@ -4,11 +4,30 @@ import type { Actor, AdminRole, ClientRole } from "@rsl/core/kernel";
 import { getContainer } from "@rsl/core/container";
 
 export async function getRequestActor(req?: Request): Promise<Actor | null> {
-  // 1. Check API key header or Bearer token
+  // 1. Check API key header, Bearer token, or query parameter (?apiKey= / ?key= / ?token=)
   if (req) {
     const authHeader =
-      req.headers.get("authorization") || req.headers.get("x-api-key");
-    const rawKey = authHeader?.replace(/^Bearer\s+/i, "")?.trim();
+      req.headers.get("authorization") ||
+      req.headers.get("x-api-key") ||
+      req.headers.get("x-publishable-key");
+    let rawKey = authHeader?.replace(/^Bearer\s+/i, "")?.trim() || "";
+
+    if (!rawKey && req.url) {
+      try {
+        const url = new URL(req.url);
+        const queryKey =
+          url.searchParams.get("apiKey") ||
+          url.searchParams.get("api_key") ||
+          url.searchParams.get("key") ||
+          url.searchParams.get("token");
+        if (queryKey && (queryKey.startsWith("rsk_") || queryKey.startsWith("rpk_"))) {
+          rawKey = queryKey.trim();
+        }
+      } catch {
+        // ignore URL parse issues
+      }
+    }
+
     if (rawKey && (rawKey.startsWith("rsk_") || rawKey.startsWith("rpk_"))) {
       const container = getContainer();
       const res = await container.apiPlatformModule.validateApiKey(rawKey);
