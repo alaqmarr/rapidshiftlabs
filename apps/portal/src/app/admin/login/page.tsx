@@ -21,6 +21,12 @@ export default function AdminLoginPage() {
     setLoading(true);
 
     try {
+      // Purge any residual admin session cookies before minting a new session
+      await fetch("/api/auth/logout?realm=admin", {
+        method: "POST",
+        cache: "no-store",
+      }).catch(() => {});
+
       const res = await signIn("admin-credentials", {
         email: email.trim(),
         password,
@@ -33,9 +39,8 @@ export default function AdminLoginPage() {
         return;
       }
 
-      // Successful authentication -> navigate to /admin
-      router.push("/admin");
-      router.refresh();
+      // Hard navigation to /admin to completely flush Next.js Router Cache from any previous login
+      window.location.replace("/admin");
     } catch {
       setError("An unexpected error occurred while connecting to authentication service.");
       setLoading(false);

@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 
+import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getContainer } from "@rsl/core/container";
 import { WIDGET_CATALOG, type WidgetDefinition } from "@rsl/core/embeds";
@@ -8,17 +9,12 @@ import type { WidgetCatalogItem } from "@/features/embeds/embed-studio";
 
 export default async function PortalEmbedsPage() {
   const session = await auth();
-  const container = getContainer();
-
-  let clientId = session?.user?.clientId;
+  const clientId = session?.user?.clientId;
   if (!clientId) {
-    try {
-      const allClients = await container.clientDirectoryRepo.list({ limit: 1 });
-      clientId = allClients.items[0]?.id || "cli_preview_01";
-    } catch {
-      clientId = "cli_preview_01";
-    }
+    redirect("/portal/login");
   }
+
+  const container = getContainer();
 
   let clientName = "Client Organization";
   try {

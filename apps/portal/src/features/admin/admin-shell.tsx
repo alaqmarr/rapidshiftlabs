@@ -130,12 +130,15 @@ export function AdminShell({ userEmail, userRole, children }: AdminShellProps) {
     if (isSigningOut) return;
     setIsSigningOut(true);
     try {
-      await fetch("/api/auth/logout?callbackUrl=/admin/login", { method: "POST" });
-      await signOut({ redirect: false });
+      await signOut({ redirect: false }).catch(() => {});
+      await fetch("/api/auth/logout?realm=admin&callbackUrl=/admin/login", {
+        method: "POST",
+        cache: "no-store",
+      });
     } catch (err) {
       console.error("Sign out error:", err);
     } finally {
-      window.location.href = "/admin/login";
+      window.location.replace("/admin/login");
     }
   };
 

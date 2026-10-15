@@ -1,5 +1,6 @@
 import type React from "react";
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { AdminShell } from "@/features/admin/admin-shell";
 
@@ -23,11 +24,14 @@ export default async function AdminLayout({
   }
 
   const session = await auth();
+  if (!session?.user || session.user.realm !== "admin") {
+    redirect("/admin/login");
+  }
 
   return (
     <AdminShell
-      userEmail={session?.user?.email || "admin@rapidshiftlabs.com"}
-      userRole={session?.user?.role || "owner"}
+      userEmail={session.user.email || ""}
+      userRole={session.user.role || "support"}
     >
       {children}
     </AdminShell>

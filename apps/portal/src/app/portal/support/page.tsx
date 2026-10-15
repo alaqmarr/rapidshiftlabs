@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 
+import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getContainer } from "@rsl/core/container";
 import type { Actor } from "@rsl/core/kernel";
@@ -11,20 +12,14 @@ import type { SerializedTicket } from "@/features/support/admin-support-view";
 
 export default async function PortalSupportPage() {
   const session = await auth();
-  const container = getContainer();
-
-  const userEmail = session?.user?.email || "client@company.com";
-  const userRole = session?.user?.role || "client_member";
-
-  let clientId = session?.user?.clientId;
+  const clientId = session?.user?.clientId;
   if (!clientId) {
-    try {
-      const allClients = await container.clientDirectoryRepo.list({ limit: 1 });
-      clientId = allClients.items[0]?.id || "cli_preview_01";
-    } catch {
-      clientId = "cli_preview_01";
-    }
+    redirect("/portal/login");
   }
+
+  const container = getContainer();
+  const userEmail = session?.user?.email || "";
+  const userRole = session?.user?.role || "client_member";
 
   const clientActor: Actor = {
     kind: "client_user",

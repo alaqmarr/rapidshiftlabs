@@ -1,4 +1,4 @@
-import { auth } from "@/auth";
+import { auth, getCachedSessionVersion } from "@/auth";
 import { getToken } from "next-auth/jwt";
 import type { Actor, AdminRole, ClientRole } from "@rsl/core/kernel";
 import { getContainer } from "@rsl/core/container";
@@ -44,9 +44,15 @@ export async function getRequestActor(req?: Request): Promise<Actor | null> {
 
     // 2. Direct JWT token inspection with candidate cookie names
     const referer = req.headers.get("referer") || "";
+    const reqUrl = req.url || "";
     const isClientContext =
       referer.includes("/portal") ||
-      (req.url && req.url.includes("/portal"));
+      reqUrl.includes("/api/v1/portal") ||
+      reqUrl.includes("/portal");
+    const isAdminContext =
+      referer.includes("/admin") ||
+      reqUrl.includes("/api/v1/admin") ||
+      reqUrl.includes("/admin");
 
     const clientCookies = [
       "__Secure-rsl.portal.session-token",
@@ -63,6 +69,8 @@ export async function getRequestActor(req?: Request): Promise<Actor | null> {
     ];
 
     async function tryGetAdminToken() {
+      let bestToken: any = null;
+      let bestIat = -1;
       for (const cName of adminCookies) {
         try {
           const token = await getToken({
@@ -71,15 +79,25 @@ export async function getRequestActor(req?: Request): Promise<Actor | null> {
             cookieName: cName,
             salt: cName,
           });
-          if (token && token.realm === "admin") return token;
+          if (token && token.realm === "admin" && token.sub) {
+            const currentSv = await getCachedSessionVersion(String(token.sub), "admin");
+            if (currentSv === null || token.sv !== currentSv) continue;
+            const iat = Number(token.iat || 0);
+            if (iat >= bestIat) {
+              bestIat = iat;
+              bestToken = token;
+            }
+          }
         } catch {
           // ignore & try next
         }
       }
-      return null;
+      return bestToken;
     }
 
     async function tryGetClientToken() {
+      let bestToken: any = null;
+      let bestIat = -1;
       for (const cName of clientCookies) {
         try {
           const token = await getToken({
@@ -88,60 +106,66 @@ export async function getRequestActor(req?: Request): Promise<Actor | null> {
             cookieName: cName,
             salt: cName,
           });
-          if (token && token.realm === "client") return token;
+          if (token && token.realm === "client" && token.sub) {
+            const currentSv = await getCachedSessionVersion(String(token.sub), "client");
+            if (currentSv === null || token.sv !== currentSv) continue;
+            const iat = Number(token.iat || 0);
+            if (iat >= bestIat) {
+              bestIat = iat;
+              bestToken = token;
+            }
+          }
         } catch {
           // ignore & try next
         }
       }
-      return null;
+      return bestToken;
     }
 
-    if (isClientContext) {
+    function toClientActor(clientToken: any): Actor {
+      return {
+        kind: "client_user",
+        id: (clientToken.sub as string) || "user",
+        email: (clientToken.email as string) || "",
+        name: (clientToken.name as string) || "Client User",
+        clientId: (clientToken.clientId as string) || "",
+        role: (clientToken.role as ClientRole) || "client_admin",
+      };
+    }
+
+    function toAdminActor(adminToken: any): Actor {
+      return {
+        kind: "admin",
+        id: (adminToken.sub as string) || "admin",
+        email: (adminToken.email as string) || "",
+        name: (adminToken.name as string) || "Admin User",
+        role: (adminToken.role as AdminRole) || "owner",
+        supportLevel: (adminToken.supportLevel as any) ?? null,
+      };
+    }
+
+    if (isClientContext && !isAdminContext) {
       const clientToken = await tryGetClientToken();
-      if (clientToken) {
-        return {
-          kind: "client_user",
-          id: (clientToken.sub as string) || "user",
-          email: (clientToken.email as string) || "",
-          name: (clientToken.name as string) || "Client User",
-          clientId: (clientToken.clientId as string) || "",
-          role: (clientToken.role as ClientRole) || "client_admin",
-        };
-      }
+      if (clientToken) return toClientActor(clientToken);
       const adminToken = await tryGetAdminToken();
-      if (adminToken) {
-        return {
-          kind: "admin",
-          id: (adminToken.sub as string) || "admin",
-          email: (adminToken.email as string) || "",
-          name: (adminToken.name as string) || "Admin User",
-          role: (adminToken.role as AdminRole) || "owner",
-          supportLevel: (adminToken.supportLevel as any) ?? null,
-        };
-      }
+      if (adminToken) return toAdminActor(adminToken);
+    } else if (isAdminContext && !isClientContext) {
+      const adminToken = await tryGetAdminToken();
+      if (adminToken) return toAdminActor(adminToken);
+      const clientToken = await tryGetClientToken();
+      if (clientToken) return toClientActor(clientToken);
     } else {
-      const adminToken = await tryGetAdminToken();
-      if (adminToken) {
-        return {
-          kind: "admin",
-          id: (adminToken.sub as string) || "admin",
-          email: (adminToken.email as string) || "",
-          name: (adminToken.name as string) || "Admin User",
-          role: (adminToken.role as AdminRole) || "owner",
-          supportLevel: (adminToken.supportLevel as any) ?? null,
-        };
+      const [clientToken, adminToken] = await Promise.all([
+        tryGetClientToken(),
+        tryGetAdminToken(),
+      ]);
+      if (clientToken && adminToken) {
+        return Number(clientToken.iat || 0) >= Number(adminToken.iat || 0)
+          ? toClientActor(clientToken)
+          : toAdminActor(adminToken);
       }
-      const clientToken = await tryGetClientToken();
-      if (clientToken) {
-        return {
-          kind: "client_user",
-          id: (clientToken.sub as string) || "user",
-          email: (clientToken.email as string) || "",
-          name: (clientToken.name as string) || "Client User",
-          clientId: (clientToken.clientId as string) || "",
-          role: (clientToken.role as ClientRole) || "client_admin",
-        };
-      }
+      if (adminToken) return toAdminActor(adminToken);
+      if (clientToken) return toClientActor(clientToken);
     }
   }
 

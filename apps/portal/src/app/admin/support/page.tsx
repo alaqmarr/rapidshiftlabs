@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 
+import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getContainer } from "@rsl/core/container";
 import type { Actor } from "@rsl/core/kernel";
@@ -12,8 +13,11 @@ import {
 
 export default async function AdminSupportPage() {
   const session = await auth();
-  const userEmail = session?.user?.email || "admin@rapidshiftlabs.com";
-  const userRole = session?.user?.role || "owner";
+  if (!session?.user || session.user.realm !== "admin") {
+    redirect("/admin/login");
+  }
+  const userEmail = session.user.email || "";
+  const userRole = session.user.role || "support";
 
   const adminActor: Actor = {
     kind: "admin",

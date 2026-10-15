@@ -82,6 +82,7 @@ export default async function proxy(req: NextRequest) {
   ];
 
   let adminToken: any = null;
+  let bestAdminIat = -1;
   for (const cName of adminCookieCandidates) {
     if (req.cookies.has(cName)) {
       try {
@@ -92,8 +93,11 @@ export default async function proxy(req: NextRequest) {
           salt: cName,
         });
         if (token && token.realm === "admin") {
-          adminToken = token;
-          break;
+          const iat = Number(token.iat || 0);
+          if (iat >= bestAdminIat) {
+            bestAdminIat = iat;
+            adminToken = token;
+          }
         }
       } catch {
         // try next
@@ -110,6 +114,7 @@ export default async function proxy(req: NextRequest) {
   ];
 
   let clientToken: any = null;
+  let bestClientIat = -1;
   for (const cName of clientCookieCandidates) {
     if (req.cookies.has(cName)) {
       try {
@@ -120,8 +125,11 @@ export default async function proxy(req: NextRequest) {
           salt: cName,
         });
         if (token && token.realm === "client") {
-          clientToken = token;
-          break;
+          const iat = Number(token.iat || 0);
+          if (iat >= bestClientIat) {
+            bestClientIat = iat;
+            clientToken = token;
+          }
         }
       } catch {
         // try next
@@ -129,6 +137,12 @@ export default async function proxy(req: NextRequest) {
     }
   }
   const hasClientSession = Boolean(clientToken);
+
+  function nextNoStore() {
+    const res = NextResponse.next({ request: { headers: requestHeaders } });
+    res.headers.set("Cache-Control", "private, no-cache, no-store, max-age=0, must-revalidate");
+    return res;
+  }
 
   // 1.5. Guard Admin and Portal API Routes
   if (pathname.startsWith("/api/v1/admin")) {
@@ -170,7 +184,7 @@ export default async function proxy(req: NextRequest) {
       }
     }
 
-    return NextResponse.next({ request: { headers: requestHeaders } });
+    return nextNoStore();
   }
 
   if (pathname.startsWith("/api/v1/portal")) {
@@ -193,7 +207,7 @@ export default async function proxy(req: NextRequest) {
       console.warn(`[proxy] 401 Unauthorized for ${req.method} ${pathname}: No client/admin session or API key found.`);
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    return NextResponse.next({ request: { headers: requestHeaders } });
+    return nextNoStore();
   }
 
   // 2. Admin Routes Guard
@@ -201,7 +215,7 @@ export default async function proxy(req: NextRequest) {
     const isLogin = pathname === "/admin/login";
 
     if (!hasAdminSession) {
-      if (isLogin) return NextResponse.next({ request: { headers: requestHeaders } });
+      if (isLogin) return nextNoStore();
       url.pathname = "/admin/login";
       url.searchParams.set("callbackUrl", pathname);
       return NextResponse.redirect(url);
@@ -258,7 +272,7 @@ export default async function proxy(req: NextRequest) {
       }
     }
 
-    return NextResponse.next({ request: { headers: requestHeaders } });
+    return nextNoStore();
   }
 
   // 3. Client Portal Routes Guard
@@ -266,7 +280,7 @@ export default async function proxy(req: NextRequest) {
     const isLogin = pathname === "/portal/login";
 
     if (!hasClientSession) {
-      if (isLogin) return NextResponse.next({ request: { headers: requestHeaders } });
+      if (isLogin) return nextNoStore();
       url.pathname = "/portal/login";
       url.searchParams.set("callbackUrl", pathname);
       return NextResponse.redirect(url);
@@ -278,7 +292,7 @@ export default async function proxy(req: NextRequest) {
       return NextResponse.redirect(url);
     }
 
-    return NextResponse.next({ request: { headers: requestHeaders } });
+    return nextNoStore();
   }
 
   return NextResponse.next({ request: { headers: requestHeaders } });

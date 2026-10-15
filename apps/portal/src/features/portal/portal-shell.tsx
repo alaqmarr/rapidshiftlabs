@@ -98,12 +98,15 @@ export function PortalShell({
     if (isSigningOut) return;
     setIsSigningOut(true);
     try {
-      await fetch("/api/auth/logout?callbackUrl=/portal/login", { method: "POST" });
-      await signOut({ redirect: false });
+      await signOut({ redirect: false }).catch(() => {});
+      await fetch("/api/auth/logout?realm=client&callbackUrl=/portal/login", {
+        method: "POST",
+        cache: "no-store",
+      });
     } catch (err) {
       console.error("Sign out error:", err);
     } finally {
-      window.location.href = "/portal/login";
+      window.location.replace("/portal/login");
     }
   };
 

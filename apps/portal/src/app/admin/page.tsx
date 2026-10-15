@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getContainer } from "@rsl/core/container";
 import { SYSTEM_ACTOR } from "@rsl/core/kernel";
@@ -16,9 +17,12 @@ export const dynamic = "force-dynamic";
 
 export default async function AdminDashboardPage() {
   const session = await auth();
+  if (!session?.user || session.user.realm !== "admin") {
+    redirect("/admin/login");
+  }
 
-  const userEmail = session?.user?.email || "admin@rapidshiftlabs.com";
-  const userRole = session?.user?.role || "owner";
+  const userEmail = session.user.email || "";
+  const userRole = session.user.role || "support";
 
   const container = getContainer();
   const adminActor = SYSTEM_ACTOR("admin-dashboard-page");

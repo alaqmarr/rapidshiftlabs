@@ -124,7 +124,17 @@ export function PortalHeader({ userEmail, userRole, clientId }: PortalHeaderProp
             </div>
 
             <button
-              onClick={() => signOut({ callbackUrl: "/portal/login" })}
+              onClick={async () => {
+                try {
+                  await signOut({ redirect: false }).catch(() => {});
+                  await fetch("/api/auth/logout?realm=client&callbackUrl=/portal/login", {
+                    method: "POST",
+                    cache: "no-store",
+                  });
+                } finally {
+                  window.location.replace("/portal/login");
+                }
+              }}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 rounded-xl border border-zinc-200 dark:border-zinc-700 transition cursor-pointer"
               data-testid="client-sign-out"
             >

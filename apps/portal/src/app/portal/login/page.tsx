@@ -21,6 +21,12 @@ export default function ClientPortalLoginPage() {
     setLoading(true);
 
     try {
+      // Purge any residual client session cookies before minting a new session
+      await fetch("/api/auth/logout?realm=client", {
+        method: "POST",
+        cache: "no-store",
+      }).catch(() => {});
+
       const res = await signIn("client-credentials", {
         email: email.trim(),
         password,
@@ -33,9 +39,8 @@ export default function ClientPortalLoginPage() {
         return;
       }
 
-      // Successful client authentication -> navigate to /portal
-      router.push("/portal");
-      router.refresh();
+      // Hard navigation to /portal to completely flush Next.js Router Cache from any previous login
+      window.location.replace("/portal");
     } catch {
       setError("An unexpected error occurred while connecting to the client portal service.");
       setLoading(false);

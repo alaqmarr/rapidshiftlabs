@@ -1,5 +1,6 @@
 import type React from "react";
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getContainer } from "@rsl/core/container";
 import { PortalShell } from "@/features/portal/portal-shell";
@@ -24,22 +25,23 @@ export default async function PortalLayout({
   }
 
   const session = await auth();
+  const clientId = session?.user?.clientId;
+  if (!clientId) {
+    redirect("/portal/login");
+  }
 
   let clientName: string | undefined;
-  const clientId = session?.user?.clientId || "client_acme_corp";
-  if (session?.user?.clientId) {
-    try {
-      const container = getContainer();
-      const client = await container.clientDirectoryRepo.findById(session.user.clientId);
-      if (client) clientName = client.name;
-    } catch {
-      // Graceful fallback to default title
-    }
+  try {
+    const container = getContainer();
+    const client = await container.clientDirectoryRepo.findById(clientId);
+    if (client) clientName = client.name;
+  } catch {
+    // Graceful fallback to default title
   }
 
   return (
     <PortalShell
-      userEmail={session?.user?.email || "client@acme.com"}
+      userEmail={session?.user?.email || ""}
       userRole={session?.user?.role || "client_admin"}
       clientId={clientId}
       clientName={clientName || "Client Portal"}

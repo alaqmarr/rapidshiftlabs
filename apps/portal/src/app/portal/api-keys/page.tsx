@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getContainer } from "@rsl/core/container";
 import {
@@ -10,18 +11,12 @@ export const dynamic = "force-dynamic";
 
 export default async function PortalApiKeysPage() {
   const session = await auth();
+  const clientId = session?.user?.clientId;
+  if (!clientId) {
+    redirect("/portal/login");
+  }
 
   const container = getContainer();
-  let clientId = session?.user?.clientId;
-
-  if (!clientId) {
-    try {
-      const allClients = await container.clientDirectoryRepo.list({ limit: 1 });
-      clientId = allClients.items[0]?.id || "cli_preview_01";
-    } catch {
-      clientId = "cli_preview_01";
-    }
-  }
 
   // Server-side data fetching before rendering
   let clientName = "Client Organization";

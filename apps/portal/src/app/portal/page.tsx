@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getContainer } from "@rsl/core/container";
 import type { Actor } from "@rsl/core/kernel";
@@ -15,21 +16,15 @@ export const dynamic = "force-dynamic";
 
 export default async function ClientPortalOverviewPage() {
   const session = await auth();
+  const clientId = (session?.user as any)?.clientId;
+  if (!clientId) {
+    redirect("/portal/login");
+  }
 
-  const userEmail = session?.user?.email || "client@company.com";
+  const userEmail = session?.user?.email || "";
   const userRole = session?.user?.role || "client_admin";
-  let clientId = (session?.user as any)?.clientId;
 
   const container = getContainer();
-
-  if (!clientId) {
-    try {
-      const allClients = await container.clientDirectoryRepo.list({ limit: 1 });
-      clientId = allClients.items[0]?.id || "cli_preview_01";
-    } catch {
-      clientId = "cli_preview_01";
-    }
-  }
 
   const clientActor: Actor = {
     kind: "client_user",
