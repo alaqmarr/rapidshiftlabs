@@ -44,6 +44,74 @@ const BOT_PATTERNS = [
   /headlesschrome/i,
 ];
 
+const TZ_COUNTRY_MAP: Record<string, string> = {
+  "Asia/Kolkata": "IN",
+  "Asia/Calcutta": "IN",
+  "Asia/Dubai": "AE",
+  "Asia/Singapore": "SG",
+  "Asia/Tokyo": "JP",
+  "Asia/Seoul": "KR",
+  "Asia/Shanghai": "CN",
+  "Asia/Hong_Kong": "HK",
+  "Asia/Bangkok": "TH",
+  "Asia/Jakarta": "ID",
+  "Asia/Manila": "PH",
+  "Asia/Kuala_Lumpur": "MY",
+  "Asia/Karachi": "PK",
+  "Asia/Dhaka": "BD",
+  "Asia/Colombo": "LK",
+  "Asia/Kathmandu": "NP",
+  "Asia/Riyadh": "SA",
+  "Asia/Qatar": "QA",
+  "Asia/Kuwait": "KW",
+  "Asia/Jerusalem": "IL",
+  "Europe/London": "GB",
+  "Europe/Dublin": "IE",
+  "Europe/Paris": "FR",
+  "Europe/Berlin": "DE",
+  "Europe/Amsterdam": "NL",
+  "Europe/Madrid": "ES",
+  "Europe/Rome": "IT",
+  "Europe/Zurich": "CH",
+  "Europe/Stockholm": "SE",
+  "Europe/Oslo": "NO",
+  "Europe/Warsaw": "PL",
+  "Europe/Lisbon": "PT",
+  "Europe/Vienna": "AT",
+  "Europe/Brussels": "BE",
+  "Europe/Istanbul": "TR",
+  "America/New_York": "US",
+  "America/Chicago": "US",
+  "America/Denver": "US",
+  "America/Los_Angeles": "US",
+  "America/Phoenix": "US",
+  "America/Toronto": "CA",
+  "America/Vancouver": "CA",
+  "America/Sao_Paulo": "BR",
+  "America/Mexico_City": "MX",
+  "America/Buenos_Aires": "AR",
+  "Australia/Sydney": "AU",
+  "Australia/Melbourne": "AU",
+  "Australia/Perth": "AU",
+  "Pacific/Auckland": "NZ",
+  "Africa/Johannesburg": "ZA",
+  "Africa/Lagos": "NG",
+  "Africa/Cairo": "EG",
+  "Africa/Nairobi": "KE",
+};
+
+function resolveCountryFromHints(tz?: unknown, lang?: unknown): string {
+  if (typeof tz === "string" && tz.trim()) {
+    const cleanTz = tz.trim();
+    if (TZ_COUNTRY_MAP[cleanTz]) return TZ_COUNTRY_MAP[cleanTz]!;
+  }
+  if (typeof lang === "string" && lang.includes("-")) {
+    const region = lang.split("-")[1]?.trim().toUpperCase();
+    if (region && /^[A-Z]{2}$/.test(region)) return region;
+  }
+  return "IN";
+}
+
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
@@ -191,25 +259,41 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const headerCountry =
+      req.headers.get("cf-ipcountry") ||
+      req.headers.get("x-vercel-ip-country") ||
+      req.headers.get("x-country-code") ||
+      req.headers.get("x-geo-country") ||
+      "";
+
     const events = rawEvents
       .filter((e: any) => e && typeof e === "object")
-      .map((e: any) => ({
-        type: typeof e.type === "string" ? e.type.slice(0, 32) : "event",
-        path: typeof e.path === "string" ? e.path.slice(0, 512) : undefined,
-        referrer: typeof e.referrer === "string" ? e.referrer.slice(0, 512) : undefined,
-        sessionId: typeof e.sessionId === "string" ? e.sessionId.slice(0, 64) : undefined,
-        utmSource: typeof e.utmSource === "string" ? e.utmSource.slice(0, 128) : undefined,
-        utmMedium: typeof e.utmMedium === "string" ? e.utmMedium.slice(0, 128) : undefined,
-        utmCampaign: typeof e.utmCampaign === "string" ? e.utmCampaign.slice(0, 128) : undefined,
-        browser: typeof e.browser === "string" ? e.browser.slice(0, 64) : undefined,
-        os: typeof e.os === "string" ? e.os.slice(0, 64) : undefined,
-        device: typeof e.device === "string" ? e.device.slice(0, 32) : undefined,
-        metricName: typeof e.metricName === "string" ? e.metricName.slice(0, 64) : undefined,
-        metricValue: typeof e.metricValue === "number" && !isNaN(e.metricValue) ? e.metricValue : undefined,
-        metricRating: typeof e.metricRating === "string" ? e.metricRating.slice(0, 32) : undefined,
-        payload: e.payload && typeof e.payload === "object" ? e.payload : undefined,
-        timestamp: typeof e.timestamp === "number" && !isNaN(e.timestamp) ? e.timestamp : Date.now(),
-      }));
+      .map((e: any) => {
+        const payloadObj = e.payload && typeof e.payload === "object" ? e.payload : undefined;
+        const resolvedCountry =
+          (typeof e.country === "string" && e.country.trim()) ||
+          (headerCountry && headerCountry !== "XX" ? headerCountry.trim().toUpperCase() : "") ||
+          resolveCountryFromHints(payloadObj?.tz, payloadObj?.lang);
+
+        return {
+          type: typeof e.type === "string" ? e.type.slice(0, 32) : "event",
+          path: typeof e.path === "string" ? e.path.slice(0, 512) : undefined,
+          referrer: typeof e.referrer === "string" ? e.referrer.slice(0, 512) : undefined,
+          sessionId: typeof e.sessionId === "string" ? e.sessionId.slice(0, 64) : undefined,
+          utmSource: typeof e.utmSource === "string" ? e.utmSource.slice(0, 128) : undefined,
+          utmMedium: typeof e.utmMedium === "string" ? e.utmMedium.slice(0, 128) : undefined,
+          utmCampaign: typeof e.utmCampaign === "string" ? e.utmCampaign.slice(0, 128) : undefined,
+          browser: typeof e.browser === "string" ? e.browser.slice(0, 64) : undefined,
+          os: typeof e.os === "string" ? e.os.slice(0, 64) : undefined,
+          device: typeof e.device === "string" ? e.device.slice(0, 32) : undefined,
+          country: resolvedCountry ? resolvedCountry.slice(0, 64) : undefined,
+          metricName: typeof e.metricName === "string" ? e.metricName.slice(0, 64) : undefined,
+          metricValue: typeof e.metricValue === "number" && !isNaN(e.metricValue) ? e.metricValue : undefined,
+          metricRating: typeof e.metricRating === "string" ? e.metricRating.slice(0, 32) : undefined,
+          payload: payloadObj,
+          timestamp: typeof e.timestamp === "number" && !isNaN(e.timestamp) ? e.timestamp : Date.now(),
+        };
+      });
 
     const result = await container.analytics.recordEventBatchUseCase.execute(
       {

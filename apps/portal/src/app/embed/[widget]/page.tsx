@@ -123,11 +123,21 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
   let credentials: any[] = [];
   let releases: any[] = [];
   let contracts: any[] = [];
-  let analytics = {
+  let analytics: any = {
     pageviews: 0,
     visitors: 0,
+    repeatVisitors: 0,
+    repeatRate: 0,
     bounceRate: 0,
+    activeVisitorsNow: 0,
+    avgDurationSec: 0,
+    avgLcpMs: null,
     topPaths: [] as any[],
+    topReferrers: [] as any[],
+    countries: [] as any[],
+    webVitals: [] as any[],
+    timeseries: [] as any[],
+    visitorSessions: [] as any[],
   };
 
   if (resolvedClientId) {
@@ -209,14 +219,55 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
     try {
       const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
       const now = Date.now();
-      const overview = await container.analyticsRepo.getOverview(resolvedClientId, thirtyDaysAgo, now);
-      if (overview) {
-        analytics = {
-          pageviews: overview.totalPageviews || 0,
-          visitors: overview.uniqueVisitors || 0,
-          bounceRate: 0,
-          topPaths: [],
-        };
+      if (container.analyticsRepo.getDeepAnalyticsSuite) {
+        const suite = await container.analyticsRepo.getDeepAnalyticsSuite(
+          resolvedClientId,
+          thirtyDaysAgo,
+          now,
+          "day"
+        );
+        if (suite) {
+          analytics = {
+            pageviews: suite.overview.totalPageviews || 0,
+            visitors: suite.overview.uniqueVisitors || 0,
+            repeatVisitors: suite.overview.repeatVisitors || 0,
+            repeatRate: suite.overview.repeatVisitorRatePercent || 0,
+            bounceRate: suite.overview.bounceRatePercent || 0,
+            activeVisitorsNow: suite.overview.activeVisitorsNow || 0,
+            avgDurationSec: suite.overview.avgSessionDurationSec || 0,
+            avgLcpMs: suite.overview.avgLcpMs ?? null,
+            topPaths: suite.topPages || [],
+            topReferrers: suite.topReferrers || [],
+            countries: suite.countries || [],
+            webVitals: suite.webVitals || [],
+            timeseries: suite.timeseries || [],
+            visitorSessions: (suite.visitorSessions || []).slice(0, 8),
+          };
+        }
+      } else {
+        const overview = await container.analyticsRepo.getOverview(
+          resolvedClientId,
+          thirtyDaysAgo,
+          now
+        );
+        if (overview) {
+          analytics = {
+            pageviews: overview.totalPageviews || 0,
+            visitors: overview.uniqueVisitors || 0,
+            repeatVisitors: 0,
+            repeatRate: 0,
+            bounceRate: 0,
+            activeVisitorsNow: 0,
+            avgDurationSec: 0,
+            avgLcpMs: overview.avgLcpMs ?? null,
+            topPaths: [],
+            topReferrers: [],
+            countries: [],
+            webVitals: [],
+            timeseries: [],
+            visitorSessions: [],
+          };
+        }
       }
     } catch (e) {}
   }
@@ -241,7 +292,22 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
         credentials,
         releases,
         contracts: (contracts as any[]) || [],
-        analytics: (analytics as any) || { pageviews: 0, visitors: 0, bounceRate: 0, topPaths: [] },
+        analytics: (analytics as any) || {
+          pageviews: 0,
+          visitors: 0,
+          repeatVisitors: 0,
+          repeatRate: 0,
+          bounceRate: 0,
+          activeVisitorsNow: 0,
+          avgDurationSec: 0,
+          avgLcpMs: null,
+          topPaths: [],
+          topReferrers: [],
+          countries: [],
+          webVitals: [],
+          timeseries: [],
+          visitorSessions: [],
+        },
       }}
     />
   );

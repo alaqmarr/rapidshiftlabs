@@ -64,8 +64,41 @@ export interface LiveEmbedProps {
     analytics?: {
       pageviews: number;
       visitors: number;
+      repeatVisitors?: number;
+      repeatRate?: number;
       bounceRate: number;
-      topPaths?: any[];
+      activeVisitorsNow?: number;
+      avgDurationSec?: number;
+      avgLcpMs?: number | null;
+      topPaths?: Array<{ key: string; count: number; uniqueVisitors?: number }>;
+      topReferrers?: Array<{ key: string; count: number }>;
+      countries?: Array<{ key: string; count: number }>;
+      webVitals?: Array<{
+        name: string;
+        p75Value: number;
+        rating: "good" | "needs-improvement" | "poor";
+        sampleCount: number;
+      }>;
+      timeseries?: Array<{
+        timestamp: number;
+        date: string;
+        pageviews: number;
+        uniqueVisitors: number;
+        repeatVisitors: number;
+        sessions: number;
+      }>;
+      visitorSessions?: Array<{
+        sessionId: string;
+        visitorHash: string;
+        isRepeatViewer: boolean;
+        visitNumber: number;
+        country: string;
+        referrer: string;
+        entryPage: string;
+        pageviewCount: number;
+        browser: string;
+        os: string;
+      }>;
     };
   };
 }
@@ -1781,11 +1814,11 @@ export function LiveEmbedClient({
                   icon={BarChart3}
                   badgeText="TRACKER PENDING INSTALLATION"
                   title="Cookieless Analytics Tracker Not Installed"
-                  description="Privacy-preserving analytics, pageviews, visitor metrics, and Core Web Vitals require the RapidShift Tracker script in your web application."
+                  description="Privacy-preserving analytics, pageviews, repeat viewer journeys, origins, and Core Web Vitals require the RapidShift Tracker script in your web application."
                   benefits={[
                     "100% Cookieless & GDPR Compliant",
-                    "Realtime Pageviews & Unique Visitors",
-                    "Core Web Vitals Telemetry (LCP, INP, CLS)",
+                    "Realtime Pageviews, Unique & Repeat Viewers",
+                    "Core Web Vitals Telemetry (LCP, INP, CLS, FCP, TTFB)",
                     "Signed Data Offload to Your Data Warehouse",
                   ]}
                   steps={[
@@ -1802,7 +1835,7 @@ export function LiveEmbedClient({
                     {
                       step: 3,
                       title: "Instant Telemetry",
-                      description: "Pageviews, session durations, and Core Web Vitals will stream into this embed automatically.",
+                      description: "Pageviews, repeat viewer journeys, and Core Web Vitals will stream into this embed automatically.",
                     },
                   ]}
                   actionText="Request Tracker Integration Help"
@@ -1827,9 +1860,9 @@ export function LiveEmbedClient({
                     <button
                       onClick={() =>
                         copyToClipboard(
-                          `<script src="${
-                            mounted && typeof window !== "undefined" ? window.location.origin : ""
-                          }/tracker.js" data-client-id="${clientId}" defer></script>`,
+                          `<script defer src="${
+                            mounted && typeof window !== "undefined" ? window.location.origin : "https://rsl.alaqmar.dev"
+                          }/t.js" data-client="${clientId}"></script>`,
                           "tracker-code"
                         )
                       }
@@ -1853,32 +1886,202 @@ export function LiveEmbedClient({
                       isDark ? "bg-black/80 border-zinc-800 text-zinc-300" : "bg-white border-zinc-200 text-zinc-800"
                     }`}
                   >
-                    {`<script src="/tracker.js" data-client-id="${clientId}" defer></script>`}
+                    {`<script defer src="https://rsl.alaqmar.dev/t.js" data-client="${clientId}"></script>`}
                   </pre>
                 </div>
               </div>
             ) : (
               <div className="space-y-3">
-                <div className="grid grid-cols-3 gap-2.5 text-center text-xs">
+                {/* 4-Card KPI Strip */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
                   <div className={`p-3 rounded-xl border ${itemBgClass}`}>
-                    <p className={`text-[10px] uppercase font-bold tracking-wider ${subtleTextClass}`}>Pageviews</p>
-                    <p className="font-extrabold text-blue-500 text-base mt-0.5">
+                    <p className={`text-[10px] uppercase font-bold tracking-wider ${subtleTextClass}`}>
+                      Pageviews (30d)
+                    </p>
+                    <p className="font-extrabold text-blue-500 text-base font-mono mt-0.5">
                       {formatNumber(analytics.pageviews)}
                     </p>
                   </div>
                   <div className={`p-3 rounded-xl border ${itemBgClass}`}>
-                    <p className={`text-[10px] uppercase font-bold tracking-wider ${subtleTextClass}`}>Visitors</p>
-                    <p className={`font-mono font-bold text-xs mt-0.5 ${headingTextClass}`}>
+                    <p className={`text-[10px] uppercase font-bold tracking-wider ${subtleTextClass}`}>
+                      Unique Visitors
+                    </p>
+                    <p className={`font-mono font-extrabold text-base mt-0.5 ${headingTextClass}`}>
                       {formatNumber(analytics.visitors)}
                     </p>
                   </div>
                   <div className={`p-3 rounded-xl border ${itemBgClass}`}>
-                    <p className={`text-[10px] uppercase font-bold tracking-wider ${subtleTextClass}`}>Bounce Rate</p>
-                    <p className="font-mono font-bold text-xs text-emerald-500 mt-0.5">
+                    <p className={`text-[10px] uppercase font-bold tracking-wider ${subtleTextClass}`}>
+                      Repeat Viewers
+                    </p>
+                    <p className="font-mono font-extrabold text-base text-indigo-500 mt-0.5">
+                      {formatNumber(analytics.repeatVisitors || 0)}{" "}
+                      <span className="text-[11px] font-semibold">
+                        ({analytics.repeatRate || 0}%)
+                      </span>
+                    </p>
+                  </div>
+                  <div className={`p-3 rounded-xl border ${itemBgClass}`}>
+                    <p className={`text-[10px] uppercase font-bold tracking-wider ${subtleTextClass}`}>
+                      Bounce Rate
+                    </p>
+                    <p className="font-mono font-extrabold text-base text-emerald-500 mt-0.5">
                       {analytics.bounceRate}%
                     </p>
                   </div>
                 </div>
+
+                {/* Traffic Trend Mini Chart (for analytics-overview & analytics-chart) */}
+                {(widget === "analytics-overview" || widget === "analytics-chart" || widget.includes("analytics")) &&
+                  analytics.timeseries &&
+                  analytics.timeseries.length > 0 && (
+                    <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2`}>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className={`font-bold ${headingTextClass} flex items-center gap-1.5`}>
+                          <Activity className="w-3.5 h-3.5 text-blue-500" />
+                          <span>30-Day Traffic &amp; Repeat Viewer Trend</span>
+                        </span>
+                        <span className={`text-[10px] font-mono ${subtleTextClass}`}>
+                          {analytics.activeVisitorsNow || 0} active now
+                        </span>
+                      </div>
+                      {(() => {
+                        const series = analytics.timeseries.slice(-14);
+                        const maxPv = Math.max(...series.map((s) => s.pageviews), 1);
+                        return (
+                          <div className="h-24 flex items-end gap-1 pt-2">
+                            {series.map((b) => {
+                              const pct = Math.max(b.pageviews > 0 ? 10 : 3, Math.round((b.pageviews / maxPv) * 100));
+                              return (
+                                <div
+                                  key={b.timestamp}
+                                  title={`${b.date}: ${b.pageviews} views, ${b.uniqueVisitors} visitors (${b.repeatVisitors} repeat)`}
+                                  className="flex-1 h-full flex items-end"
+                                >
+                                  <div
+                                    style={{ height: `${pct}%` }}
+                                    className={`w-full rounded-t ${
+                                      b.pageviews > 0 ? "bg-blue-500 hover:bg-blue-400" : isDark ? "bg-zinc-800" : "bg-zinc-200"
+                                    }`}
+                                  />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                {/* Top Routes & Origins ("From Where") */}
+                {(widget === "analytics-overview" || widget === "top-pages" || widget.includes("analytics")) && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2`}>
+                      <p className={`text-[11px] font-bold uppercase tracking-wider ${subtleTextClass}`}>
+                        Top Visited Pages
+                      </p>
+                      {(analytics.topPaths || []).length === 0 ? (
+                        <p className={`text-xs ${subtleTextClass}`}>No routes recorded yet.</p>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {(analytics.topPaths || []).slice(0, 5).map((p) => (
+                            <div key={p.key} className="flex items-center justify-between text-xs gap-2">
+                              <span className={`font-mono truncate ${headingTextClass}`}>{p.key}</span>
+                              <span className="font-mono font-bold text-blue-500 shrink-0">{p.count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2`}>
+                      <p className={`text-[11px] font-bold uppercase tracking-wider ${subtleTextClass}`}>
+                        From Where (Countries &amp; Referrers)
+                      </p>
+                      <div className="space-y-1.5">
+                        {(analytics.countries || []).slice(0, 3).map((c) => (
+                          <div key={`c-${c.key}`} className="flex items-center justify-between text-xs">
+                            <span className={headingTextClass}>Region: {c.key}</span>
+                            <span className="font-mono font-bold text-indigo-500">{c.count}</span>
+                          </div>
+                        ))}
+                        {(analytics.topReferrers || []).slice(0, 3).map((r) => (
+                          <div key={`r-${r.key}`} className="flex items-center justify-between text-xs">
+                            <span className={`truncate ${subtleTextClass}`}>via {r.key}</span>
+                            <span className="font-mono font-bold text-emerald-500">{r.count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Core Web Vitals Strip */}
+                {(widget === "analytics-overview" || widget === "web-vitals") &&
+                  analytics.webVitals &&
+                  analytics.webVitals.length > 0 && (
+                    <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2`}>
+                      <p className={`text-[11px] font-bold uppercase tracking-wider ${subtleTextClass}`}>
+                        Core Web Vitals (p75)
+                      </p>
+                      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                        {analytics.webVitals.map((v) => (
+                          <div
+                            key={v.name}
+                            className={`p-2 rounded-lg border text-center ${
+                              isDark ? "bg-zinc-900/70 border-zinc-800" : "bg-white border-zinc-200"
+                            }`}
+                          >
+                            <div className={`text-[10px] font-mono font-bold ${subtleTextClass}`}>
+                              {v.name}
+                            </div>
+                            <div className={`text-xs font-mono font-extrabold mt-0.5 ${headingTextClass}`}>
+                              {v.name === "LCP" || v.name === "FCP"
+                                ? `${(v.p75Value / 1000).toFixed(2)}s`
+                                : v.name === "CLS"
+                                ? v.p75Value.toFixed(3)
+                                : `${Math.round(v.p75Value)}ms`}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                {/* Recent Visitor Journeys */}
+                {widget === "analytics-overview" &&
+                  analytics.visitorSessions &&
+                  analytics.visitorSessions.length > 0 && (
+                    <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2`}>
+                      <p className={`text-[11px] font-bold uppercase tracking-wider ${subtleTextClass}`}>
+                        Recent Visitor Journeys
+                      </p>
+                      <div className="space-y-1.5">
+                        {analytics.visitorSessions.slice(0, 4).map((s) => (
+                          <div
+                            key={s.sessionId}
+                            className="flex flex-wrap items-center justify-between gap-2 text-[11px] py-1 border-b border-zinc-500/10 last:border-0"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
+                                  s.isRepeatViewer
+                                    ? "bg-indigo-500/15 text-indigo-400"
+                                    : "bg-emerald-500/15 text-emerald-400"
+                                }`}
+                              >
+                                {s.isRepeatViewer ? `Repeat #${s.visitNumber}` : "New"}
+                              </span>
+                              <span className={`font-mono ${headingTextClass}`}>{s.entryPage}</span>
+                            </div>
+                            <div className={`font-mono text-[10px] ${subtleTextClass}`}>
+                              {s.country} · {s.referrer} · {s.browser}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
               </div>
             )}
           </div>

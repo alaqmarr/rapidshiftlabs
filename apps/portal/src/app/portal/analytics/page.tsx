@@ -25,18 +25,39 @@ export default async function PortalAnalyticsPage() {
     overview: {
       totalPageviews: 0,
       uniqueVisitors: 0,
+      totalSessions: 0,
+      repeatVisitors: 0,
+      newVisitors: 0,
+      repeatVisitorRatePercent: 0,
+      bounceRatePercent: 0,
+      avgPagesPerSession: 0,
+      avgSessionDurationSec: 0,
+      activeVisitorsNow: 0,
       totalEvents: 0,
       totalErrors: 0,
       avgLcpMs: null,
     },
     topPages: [],
+    entryPages: [],
+    exitPages: [],
     topReferrers: [],
+    countries: [],
+    timezones: [],
+    utmSources: [],
+    utmMediums: [],
+    utmCampaigns: [],
     devices: {
       browsers: [],
       os: [],
       devices: [],
+      screens: [],
+      languages: [],
     },
     webVitals: [],
+    timeseries: [],
+    visitorSessions: [],
+    customEvents: [],
+    recentErrors: [],
   };
   let offloadConfig: any = null;
 
@@ -45,14 +66,13 @@ export default async function PortalAnalyticsPage() {
     const toEpoch = Date.now();
     const fromEpoch = toEpoch - 30 * 86400000;
 
-    const [client, overviewRes, vitalsRes, offload] = await Promise.all([
+    const [client, suite, offload] = await Promise.all([
       container.clientDirectoryRepo.findById(clientId).catch(() => null),
-      container.analytics.getOverviewUseCase
-        .execute(clientId, fromEpoch, toEpoch, actor)
-        .catch(() => null),
-      container.analytics.getWebVitalsUseCase
-        .execute(clientId, fromEpoch, toEpoch, actor)
-        .catch(() => []),
+      container.analyticsRepo.getDeepAnalyticsSuite
+        ? container.analyticsRepo
+            .getDeepAnalyticsSuite(clientId, fromEpoch, toEpoch, "day")
+            .catch(() => null)
+        : Promise.resolve(null),
       container.analytics.manageOffloadConfigUseCase
         .get(clientId, actor)
         .catch(() => null),
@@ -62,19 +82,8 @@ export default async function PortalAnalyticsPage() {
       clientName = client.name;
     }
 
-    if (overviewRes) {
-      analyticsData = {
-        overview: overviewRes.overview,
-        topPages: overviewRes.topPages || [],
-        topReferrers: overviewRes.topReferrers || [],
-        devices: overviewRes.devices || { browsers: [], os: [], devices: [] },
-        webVitals: vitalsRes.map((v) => ({
-          name: v.name,
-          p75Value: v.p75Value,
-          rating: v.rating,
-          sampleCount: v.sampleCount,
-        })),
-      };
+    if (suite) {
+      analyticsData = suite;
     }
 
     offloadConfig = offload;
