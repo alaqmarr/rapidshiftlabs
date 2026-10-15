@@ -1,0 +1,14 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+allowBuilds:
+  sharp: false
+  unrs-resolver: false
+  esbuild: true
+  cpu-features: false
+  ssh2: false
+
+overrides:
+  nodemailer: "^10.1.0"
+

@@ -1,0 +1,31 @@
+{
+  "name": "rapidshiftlabs",
+  "private": true,
+  "version": "0.1.0",
+  "description": "RapidShift Labs control plane: billing, access gate, fleet ops, monitoring, support, analytics and embeds for client apps.",
+  "packageManager": "pnpm@12.10.1",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "dev:portal": "pnpm --filter @rsl/portal dev",
+    "dev:worker": "pnpm --filter @rsl/worker dev",
+    "build": "turbo run build",
+    "start:portal": "pnpm --filter @rsl/portal start",
+    "start:worker": "pnpm --filter @rsl/worker start",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint && pnpm check:architecture",
+    "check:architecture": "pnpm --filter @rsl/core check:architecture",
+    "test:e2e": "pnpm --filter @rsl/core exec vitest run --config ../../tests/e2e/vitest.config.ts tests/e2e",
+    "test": "turbo run test && pnpm test:e2e",
+    "db:generate": "pnpm --filter @rsl/core db:generate",
+    "db:migrate": "pnpm --filter @rsl/core db:migrate",
+    "admin:create": "pnpm --filter @rsl/core admin:create",
+    "seed:demo": "pnpm --filter @rsl/core seed:demo"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "typescript": "^5.9.0"
+  }
+}

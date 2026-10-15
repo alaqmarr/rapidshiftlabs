@@ -1,0 +1,26 @@
+node_modules/
+.next/
+dist/
+out/
+.turbo/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+.agents/
+.turbo/
+# Data (SQLite files + WAL/SHM, uploads, backups)
+data/
+!data/.gitkeep
+
+# Env
+.env
+.env.*
+.env.example
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/settings.json
+.idea/
+*.log
