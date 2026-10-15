@@ -46,6 +46,13 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
+      <head>
+        <script
+          defer
+          src="https://rsl.alaqmar.dev/t.js"
+          data-client="cli_01M4ZQK3D3EY8WYGS20H5M0D9S"
+        />
+      </head>
       <body className="min-h-full flex flex-col bg-zinc-50 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50 font-sans">
         <Providers>{children}</Providers>
       </body>

@@ -151,11 +151,15 @@ export async function POST(req: NextRequest) {
         try {
           const originHost = new URL(origin).hostname.toLowerCase();
           const monitored = await container.monitoredDomainRepo.findByClientId(rawClientId).catch(() => []);
-          // If the client has registered monitored domains, ensure request matches registered host or localhost
+          // If the client has registered monitored domains, ensure request matches registered host, first-party host, or localhost
           if (monitored && monitored.length > 0) {
             const allowedHosts = new Set(monitored.map((m: any) => m.hostname.toLowerCase()));
-            const isLocal = originHost === "localhost" || originHost === "127.0.0.1";
-            if (!isLocal && !allowedHosts.has(originHost)) {
+            const selfHost = (req.headers.get("host") || req.nextUrl.hostname || "").split(":")[0]?.toLowerCase();
+            const isLocalOrSelf =
+              originHost === "localhost" ||
+              originHost === "127.0.0.1" ||
+              (Boolean(selfHost) && originHost === selfHost);
+            if (!isLocalOrSelf && !allowedHosts.has(originHost)) {
               console.warn(`[Ingest Spoof Guard] Rejected analytics from unapproved origin: ${originHost} for client ${rawClientId}`);
               return NextResponse.json(
                 { error: "Origin domain not authorized for this client" },

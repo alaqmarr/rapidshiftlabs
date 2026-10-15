@@ -26,16 +26,27 @@ interface QueuedEvent {
   if (typeof window === "undefined") return;
 
   // Extract config from script tag
-  const script = document.currentScript as HTMLScriptElement | null;
+  const script =
+    (document.currentScript as HTMLScriptElement | null) ||
+    (document.querySelector(
+      'script[data-client],script[data-client-id],script[data-key],script[src*="/t.js"]'
+    ) as HTMLScriptElement | null);
   const clientId =
+    script?.getAttribute("data-client") ||
     script?.getAttribute("data-client-id") ||
     script?.getAttribute("data-key") ||
     (window as any).RSL_CLIENT_ID ||
     "";
+  let defaultEndpoint = "/api/collect";
+  try {
+    if (script?.src) {
+      defaultEndpoint = new URL("/api/collect", script.src).href;
+    }
+  } catch {}
   const endpoint =
     script?.getAttribute("data-endpoint") ||
     (window as any).RSL_ENDPOINT ||
-    "/api/collect";
+    defaultEndpoint;
 
   // Ephemeral in-tab session ID (destroyed when tab closes, zero persistent tracking)
   let sessionId = "";
