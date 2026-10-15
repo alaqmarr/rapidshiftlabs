@@ -9,8 +9,9 @@ next-env.d.ts
 .agents/
 .turbo/
 # Data (SQLite files + WAL/SHM, uploads, backups)
-data/
-!data/.gitkeep
+/data/
+!/data/.gitkeep
+/apps/*/data/
 
 # Env
 .env
