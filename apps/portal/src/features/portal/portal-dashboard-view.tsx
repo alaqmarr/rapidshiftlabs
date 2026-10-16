@@ -29,6 +29,7 @@ import {
 import { formatCurrency, formatDate, formatDateTime } from "@/lib/format";
 import { useAlert } from "@/components/ui/alert-popup";
 import { IosSpinner } from "@/components/ui/ios-spinner";
+import { calculateContractTenure, getBillingCycleLabel } from "@/lib/contract-tenure";
 
 export interface PortalProcessItem {
   id: string;
@@ -113,6 +114,19 @@ export interface PortalDashboardViewProps {
   };
   recentInvoices: PortalInvoiceItem[];
   activeContractsCount: number;
+  activeContract?: {
+    id: string;
+    code: string;
+    title: string;
+    status: string;
+    billingCycle: string;
+    intervalCount?: number;
+    anchorDay?: number;
+    validFrom: number;
+    validTo: number;
+    amountMinor: number;
+    currency?: string;
+  } | null;
   processes: PortalProcessItem[];
   domains: PortalDomainItem[];
   tickets: PortalTicketItem[];
@@ -132,6 +146,7 @@ export function PortalDashboardView({
   billingSummary,
   recentInvoices,
   activeContractsCount,
+  activeContract,
   processes: initialProcesses,
   domains,
   tickets,
@@ -145,6 +160,7 @@ export function PortalDashboardView({
   const [cooldownTimers, setCooldownTimers] = useState<Record<string, number>>({});
   const [copiedSnippet, setCopiedSnippet] = useState(false);
   const [activeTab, setActiveTab] = useState<"fleet" | "billing" | "domains" | "support" | "releases">("fleet");
+  const contractTenure = activeContract ? calculateContractTenure(activeContract) : null;
 
   const isOverdue = billingSummary.outstandingMinor > 0;
 
@@ -328,7 +344,7 @@ export async function middleware(req) {
           {/* Account Standing */}
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 rounded-2xl p-5 shadow-xs relative overflow-hidden group hover:border-blue-500/40 transition">
             <div className="flex items-center justify-between">
-              <span className="steel-metric-label text-zinc-500 dark:text-zinc-400">Account Standing</span>
+              <span className="steel-metric-label text-zinc-500 dark:text-zinc-400">Account &amp; Contract Standing</span>
               <div className="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200/60 dark:border-blue-800/60 flex items-center justify-center">
                 <Receipt className="w-4 h-4" />
               </div>
@@ -341,10 +357,14 @@ export async function middleware(req) {
               </span>
             </div>
             <div className="mt-2.5 flex items-center justify-between text-xs">
-              <span className="text-zinc-400 font-sans">
-                {billingSummary.overdueCount > 0 ? `${billingSummary.overdueCount} overdue` : "Dues current"}
+              <span className="text-zinc-400 font-sans truncate max-w-[180px]">
+                {billingSummary.overdueCount > 0
+                  ? `${billingSummary.overdueCount} overdue`
+                  : contractTenure
+                  ? `${contractTenure.shortTenureLabel} • Next: ${contractTenure.nextBillingDateLabel}`
+                  : "Dues current"}
               </span>
-              <Link href="/portal/billing" className="font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1">
+              <Link href="/portal/billing" className="font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 shrink-0">
                 <span>Ledger</span>
                 <ArrowRight className="w-3 h-3" />
               </Link>
@@ -567,7 +587,7 @@ export async function middleware(req) {
                     Invoices &amp; Tax Settlement
                   </h2>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                    Download verified GST/Non-GST tax invoices and inspect payment settlement history.
+                    Download verified GST/Non-GST tax invoices and inspect your active contract tenure &amp; settlement history.
                   </p>
                 </div>
                 <Link
@@ -578,6 +598,42 @@ export async function middleware(req) {
                   <ExternalLink className="w-3 h-3" />
                 </Link>
               </div>
+
+              {activeContract && contractTenure && (
+                <div className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/80 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-tech font-bold text-blue-600 dark:text-blue-400">
+                        {activeContract.code}
+                      </span>
+                      <span className="font-bold text-zinc-900 dark:text-white">{activeContract.title}</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600 text-white">
+                        {contractTenure.tenureLabel}
+                      </span>
+                    </div>
+                    <p className="text-zinc-500">
+                      Period: <strong className="text-zinc-700 dark:text-zinc-300">{contractTenure.dateRangeLabel}</strong> &bull;{" "}
+                      {contractTenure.isOneTime
+                        ? "One-Time Engagement"
+                        : `${getBillingCycleLabel(activeContract.billingCycle, activeContract.intervalCount)} (${contractTenure.remainingLabel})`}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-5 font-tech shrink-0">
+                    <div>
+                      <span className="text-[10px] text-zinc-400 uppercase block">Total Value (TCV)</span>
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(contractTenure.totalContractValueMinor, activeContract.currency || client.currency)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-zinc-400 uppercase block">Next Billing</span>
+                      <span className="font-bold text-zinc-900 dark:text-white">
+                        {contractTenure.nextBillingDateLabel}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {recentInvoices.length === 0 ? (
                 <div className="text-center py-12 text-zinc-500 dark:text-zinc-400 text-xs">

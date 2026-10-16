@@ -20,6 +20,7 @@ import {
   Check,
 } from "lucide-react";
 import { formatCurrency as kernelFormatCurrency } from "@/lib/currency";
+import { calculateContractTenure, getBillingCycleLabel } from "@/lib/contract-tenure";
 
 export interface InvoiceItem {
   id: string;
@@ -60,12 +61,27 @@ export interface ClientData {
   currency?: string;
 }
 
+export interface ActiveContractInfo {
+  id: string;
+  code: string;
+  title: string;
+  status: string;
+  billingCycle: string;
+  intervalCount?: number;
+  anchorDay?: number;
+  validFrom: number;
+  validTo: number;
+  amountMinor: number;
+  currency?: string;
+}
+
 interface PortalBillingViewProps {
   client: ClientData | null;
   invoices: InvoiceItem[];
   payments: PaymentItem[];
   summary: BillingSummary;
   nextDueInvoice: InvoiceItem | null;
+  activeContract?: ActiveContractInfo | null;
 }
 
 export function PortalBillingView({
@@ -74,6 +90,7 @@ export function PortalBillingView({
   payments,
   summary,
   nextDueInvoice,
+  activeContract,
 }: PortalBillingViewProps) {
   const [activeTab, setActiveTab] = useState<"invoices" | "payments">("invoices");
   const [invoiceSearch, setInvoiceSearch] = useState("");
@@ -81,6 +98,10 @@ export function PortalBillingView({
   const [selectedInvoiceModal, setSelectedInvoiceModal] = useState<InvoiceItem | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [now] = useState(() => Date.now());
+  const contractTenure = useMemo(
+    () => (activeContract ? calculateContractTenure(activeContract, now) : null),
+    [activeContract, now]
+  );
 
   const formatCurrency = (minor: number, curr?: string) => {
     return kernelFormatCurrency(minor, curr || client?.currency || "INR");
@@ -327,14 +348,20 @@ export function PortalBillingView({
             </p>
           </div>
 
-          {/* Next Due Countdown */}
+          {/* Next Due / Billing Countdown */}
           <div className="p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs">
             <div className="flex items-center justify-between">
-              <span className="steel-metric-label text-zinc-500 dark:text-zinc-400">Next Due Date</span>
+              <span className="steel-metric-label text-zinc-500 dark:text-zinc-400">
+                {nextDueInvoice ? "Next Due Date" : "Next Scheduled Billing"}
+              </span>
               <Calendar className="w-4 h-4 text-blue-500" />
             </div>
             <div className="mt-2 text-xl font-tech tabular-nums steel-kpi text-zinc-900 dark:text-white" data-testid="portal-next-due-date">
-              {nextDueInvoice ? formatDate(nextDueInvoice.dueDate) : "No Dues"}
+              {nextDueInvoice
+                ? formatDate(nextDueInvoice.dueDate)
+                : contractTenure
+                ? contractTenure.nextBillingDateLabel
+                : "No Dues"}
             </div>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 font-sans">
               {nextDueInvoice ? (
@@ -347,6 +374,10 @@ export function PortalBillingView({
                 >
                   {getDueCountdown(nextDueInvoice.dueDate).text} (
                   <span className="font-tech">{nextDueInvoice.invoiceNumber}</span>)
+                </span>
+              ) : contractTenure ? (
+                <span>
+                  Contract Tenure: <strong className="text-zinc-700 dark:text-zinc-300">{contractTenure.shortTenureLabel}</strong> ({contractTenure.remainingLabel})
                 </span>
               ) : (
                 "No open scheduled invoices"
@@ -388,6 +419,55 @@ export function PortalBillingView({
             </p>
           </div>
         </div>
+
+        {/* Active Contract & Calculated Tenure Bar */}
+        {activeContract && contractTenure && (
+          <div className="p-4 sm:p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-tech font-bold uppercase px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800">
+                    {activeContract.code}
+                  </span>
+                  <h3 className="text-xs font-bold text-zinc-900 dark:text-white">
+                    {activeContract.title}
+                  </h3>
+                  <span className="text-[10px] font-tech font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                    {contractTenure.tenureLabel}
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-500">
+                  Agreement Period: <strong className="text-zinc-700 dark:text-zinc-300">{contractTenure.dateRangeLabel}</strong> &bull;{" "}
+                  {contractTenure.isOneTime
+                    ? "One-Time Engagement"
+                    : `${getBillingCycleLabel(activeContract.billingCycle, activeContract.intervalCount)} (${contractTenure.remainingLabel})`}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-6 text-xs font-tech shrink-0">
+                <div>
+                  <span className="text-[10px] text-zinc-400 uppercase block">
+                    {contractTenure.isOneTime ? "Engagement Fee" : "Cycle Retainer"}
+                  </span>
+                  <span className="font-bold text-zinc-900 dark:text-white">
+                    {formatCurrency(activeContract.amountMinor, activeContract.currency)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-400 uppercase block">Total Contract Value (TCV)</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                    {formatCurrency(contractTenure.totalContractValueMinor, activeContract.currency)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-400 uppercase block">Next Billing Date</span>
+                  <span className="font-bold text-blue-600 dark:text-blue-400">
+                    {contractTenure.nextBillingDateLabel}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Remittance & Bank Settlement Box */}
         <div className="p-5 rounded-xl border border-blue-100 dark:border-blue-900/60 bg-gradient-to-r from-blue-50/50 via-white to-slate-50 dark:from-blue-950/20 dark:via-zinc-900 dark:to-zinc-900 shadow-xs">

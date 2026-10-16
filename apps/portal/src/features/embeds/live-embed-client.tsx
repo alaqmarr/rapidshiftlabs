@@ -35,6 +35,7 @@ import {
   Calendar,
 } from "lucide-react";
 import { IosSpinner } from "@/components/ui/ios-spinner";
+import { calculateContractTenure, getBillingCycleLabel } from "@/lib/contract-tenure";
 
 export interface LiveEmbedProps {
   widget: string;
@@ -884,24 +885,37 @@ export function LiveEmbedClient({
               ) : (
                 contracts.map((ctr: any) => {
                   const isActive = ctr.status === "active";
+                  const tenure = calculateContractTenure({
+                    billingCycle: ctr.billingCycle || "monthly",
+                    intervalCount: ctr.intervalCount || 1,
+                    anchorDay: ctr.anchorDay || 1,
+                    validFrom: ctr.validFrom,
+                    validTo: ctr.validTo,
+                    amountMinor: ctr.amountMinor || 0,
+                    currency: ctr.currency || "INR",
+                    status: ctr.status,
+                  });
                   return (
                     <div key={ctr.id} className={`p-4 rounded-xl border ${itemBgClass} space-y-3 text-xs`}>
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className={`font-steel font-bold text-sm ${headingTextClass}`}>
                               {ctr.title}
                             </span>
                             <span className={`font-mono text-[10px] ${subtleTextClass}`}>
                               ({ctr.code})
                             </span>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600/15 text-blue-500 border border-blue-500/30">
+                              {tenure.tenureLabel}
+                            </span>
                           </div>
                           <p className={`text-[11px] mt-0.5 ${subtleTextClass}`} suppressHydrationWarning>
-                            Tenure: {formatDate(ctr.validFrom)} &rarr; {formatDate(ctr.validTo)}
+                            Agreement Period: {tenure.dateRangeLabel} &bull; {tenure.remainingLabel}
                           </p>
                         </div>
                         <span
-                          className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider font-tech ${
+                          className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider font-tech shrink-0 ${
                             isActive
                               ? "bg-emerald-500/15 text-emerald-500 border border-emerald-500/30"
                               : "bg-amber-500/15 text-amber-500 border border-amber-500/30"
@@ -911,23 +925,42 @@ export function LiveEmbedClient({
                         </span>
                       </div>
 
+                      {!tenure.isOneTime && (
+                        <div className="space-y-1">
+                          <div className="w-full h-1.5 rounded-full bg-zinc-500/20 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-blue-500 transition-all"
+                              style={{ width: `${tenure.progressPct}%` }}
+                            />
+                          </div>
+                          <div className={`flex justify-between text-[10px] font-mono ${subtleTextClass}`}>
+                            <span>{tenure.elapsedDays}d elapsed ({tenure.progressPct}%)</span>
+                            <span>Next Billing: {tenure.nextBillingDateLabel}</span>
+                          </div>
+                        </div>
+                      )}
+
                       <div className="grid grid-cols-3 gap-2 text-center">
                         <div className={`p-2.5 rounded-lg border ${isDark ? "bg-zinc-900/60 border-zinc-800" : "bg-white border-zinc-200"}`}>
-                          <div className={`text-[10px] uppercase font-bold ${subtleTextClass}`}>Retainer</div>
+                          <div className={`text-[10px] uppercase font-bold ${subtleTextClass}`}>
+                            {tenure.isOneTime ? "One-Time Fee" : "Cycle Retainer"}
+                          </div>
                           <div className={`font-mono font-bold text-xs mt-0.5 ${headingTextClass}`}>
                             ₹{formatMinorToINR(ctr.amountMinor)}
                           </div>
                         </div>
                         <div className={`p-2.5 rounded-lg border ${isDark ? "bg-zinc-900/60 border-zinc-800" : "bg-white border-zinc-200"}`}>
-                          <div className={`text-[10px] uppercase font-bold ${subtleTextClass}`}>Cycle</div>
-                          <div className={`font-mono font-bold text-xs uppercase mt-0.5 ${headingTextClass}`}>
-                            {ctr.billingCycle?.replace("_", " ")} (Day {ctr.anchorDay || 1})
+                          <div className={`text-[10px] uppercase font-bold ${subtleTextClass}`}>Total Value (TCV)</div>
+                          <div className="font-mono font-bold text-xs mt-0.5 text-emerald-500">
+                            ₹{formatMinorToINR(tenure.totalContractValueMinor)}
                           </div>
                         </div>
                         <div className={`p-2.5 rounded-lg border ${isDark ? "bg-zinc-900/60 border-zinc-800" : "bg-white border-zinc-200"}`}>
-                          <div className={`text-[10px] uppercase font-bold ${subtleTextClass}`}>Tax Mode</div>
+                          <div className={`text-[10px] uppercase font-bold ${subtleTextClass}`}>Engagement</div>
                           <div className={`font-mono font-bold text-xs uppercase mt-0.5 ${headingTextClass}`}>
-                            {ctr.taxProfile === "gst" ? `GST ${Math.round((ctr.gstRateBps || 1800) / 100)}%` : "Non-GST"}
+                            {tenure.isOneTime
+                              ? "One-Time"
+                              : `${getBillingCycleLabel(ctr.billingCycle, ctr.intervalCount)}`}
                           </div>
                         </div>
                       </div>
@@ -943,6 +976,18 @@ export function LiveEmbedClient({
               const dueMs = targetInvoice?.dueDate ? new Date(targetInvoice.dueDate).getTime() : null;
               const diffDays = dueMs ? Math.ceil((dueMs - Date.now()) / (1000 * 60 * 60 * 24)) : null;
               const isOverdue = diffDays !== null && diffDays < 0;
+              const primaryContractTenure = contracts[0]
+                ? calculateContractTenure({
+                    billingCycle: contracts[0].billingCycle || "monthly",
+                    intervalCount: contracts[0].intervalCount || 1,
+                    anchorDay: contracts[0].anchorDay || 1,
+                    validFrom: contracts[0].validFrom,
+                    validTo: contracts[0].validTo,
+                    amountMinor: contracts[0].amountMinor || 0,
+                    currency: contracts[0].currency || "INR",
+                    status: contracts[0].status,
+                  })
+                : null;
 
               return (
                 <div className="space-y-3">
@@ -959,6 +1004,8 @@ export function LiveEmbedClient({
                       <span className={`text-[10px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>
                         {targetInvoice
                           ? `Invoice ${targetInvoice.invoiceNumber} Due Date`
+                          : primaryContractTenure && !primaryContractTenure.isOneTime
+                          ? `Next Scheduled Billing (${primaryContractTenure.shortTenureLabel} Tenure)`
                           : "Account Settlement Status"}
                       </span>
                       <div
@@ -977,6 +1024,8 @@ export function LiveEmbedClient({
                             : isOverdue
                             ? `${Math.abs(diffDays!)} Days Overdue`
                             : `Due in ${diffDays} Days`
+                          : primaryContractTenure && !primaryContractTenure.isOneTime
+                          ? primaryContractTenure.nextBillingDateLabel
                           : "No Pending Dues"}
                       </div>
                       <p className={`text-[11px] mt-0.5 ${subtleTextClass}`} suppressHydrationWarning>
@@ -984,8 +1033,8 @@ export function LiveEmbedClient({
                           ? `Target Date: ${formatDate(targetInvoice.dueDate)} • Balance: ₹${formatMinorToINR(
                               targetInvoice.balanceMinor ?? targetInvoice.totalMinor
                             )}`
-                          : contracts[0]
-                          ? `Active ${contracts[0].billingCycle} retainer • Anchor Day ${contracts[0].anchorDay || 1}`
+                          : primaryContractTenure
+                          ? `${contracts[0].title} • ${primaryContractTenure.tenureLabel} (${primaryContractTenure.remainingLabel})`
                           : `${paidCount} settled invoice(s) on record`}
                       </p>
                     </div>
@@ -1045,7 +1094,12 @@ export function LiveEmbedClient({
                       All Invoices Settled &bull; ₹0 Due
                     </div>
                     <p className={`text-[11px] ${subtleTextClass}`}>
-                      Total Paid: ₹{formatMinorToINR(summary.totalPaidMinor)} across {paidCount} invoice{paidCount === 1 ? "" : "s"}
+                      {contracts[0]
+                        ? (() => {
+                            const t = calculateContractTenure(contracts[0]);
+                            return `Contract Tenure: ${t.tenureLabel} • Next Billing: ${t.nextBillingDateLabel}`;
+                          })()
+                        : `Total Paid: ₹${formatMinorToINR(summary.totalPaidMinor)} across ${paidCount} invoice${paidCount === 1 ? "" : "s"}`}
                     </p>
                   </div>
                 </div>
@@ -1120,20 +1174,51 @@ export function LiveEmbedClient({
                 </div>
               </div>
 
-              {/* Real Contract Details Row (if contract exists) */}
-              {contracts[0] && (
-                <div className={`p-3.5 rounded-xl border ${itemBgClass} flex items-center justify-between text-xs`}>
-                  <div>
-                    <span className={`font-semibold ${headingTextClass}`}>{contracts[0].title}</span>
-                    <p className={`text-[10px] ${subtleTextClass}`} suppressHydrationWarning>
-                      Cycle: {contracts[0].billingCycle?.toUpperCase()} (Day {contracts[0].anchorDay || 1}) &bull; Valid until {formatDate(contracts[0].validTo)}
-                    </p>
-                  </div>
-                  <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-500 text-[10px] font-bold font-tech uppercase tracking-wider">
-                    {contracts[0].status}
-                  </span>
-                </div>
-              )}
+              {/* Real Contract Details Row with Calculated Tenure (if contract exists) */}
+              {contracts[0] &&
+                (() => {
+                  const tenure = calculateContractTenure({
+                    billingCycle: contracts[0].billingCycle || "monthly",
+                    intervalCount: contracts[0].intervalCount || 1,
+                    anchorDay: contracts[0].anchorDay || 1,
+                    validFrom: contracts[0].validFrom,
+                    validTo: contracts[0].validTo,
+                    amountMinor: contracts[0].amountMinor || 0,
+                    currency: contracts[0].currency || "INR",
+                    status: contracts[0].status,
+                  });
+                  return (
+                    <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2 text-xs`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`font-semibold ${headingTextClass}`}>{contracts[0].title}</span>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600/15 text-blue-500 border border-blue-500/30">
+                              {tenure.tenureLabel}
+                            </span>
+                          </div>
+                          <p className={`text-[10px] mt-0.5 ${subtleTextClass}`} suppressHydrationWarning>
+                            {tenure.dateRangeLabel} &bull;{" "}
+                            {tenure.isOneTime
+                              ? "One-Time Engagement"
+                              : `Next Billing: ${tenure.nextBillingDateLabel} (${tenure.remainingLabel})`}
+                          </p>
+                        </div>
+                        <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-500 text-[10px] font-bold font-tech uppercase tracking-wider shrink-0">
+                          {contracts[0].status}
+                        </span>
+                      </div>
+                      {!tenure.isOneTime && (
+                        <div className="w-full h-1.5 rounded-full bg-zinc-500/20 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-blue-500 transition-all"
+                            style={{ width: `${tenure.progressPct}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
               {/* Quick Action Buttons */}
               <div className="flex items-center gap-2 pt-1">

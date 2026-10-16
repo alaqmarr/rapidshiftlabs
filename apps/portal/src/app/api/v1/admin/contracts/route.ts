@@ -39,22 +39,59 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const container = getContainer();
 
-    const contract = await container.contractsModule.createContractUseCase.execute({
+    const isOneTime =
+      Boolean(body.isOneTime) ||
+      body.billingCycle === "one_time" ||
+      body.billingCycle === "milestone";
+    const billingCycle = isOneTime
+      ? "one_time"
+      : body.billingCycle === "annual"
+        ? "yearly"
+        : body.billingCycle || "monthly";
+
+    const validFromMs = body.validFrom ? new Date(body.validFrom).getTime() : Date.now();
+    const rawValidToMs = body.validTo ? new Date(body.validTo).getTime() : validFromMs + 86_400_000;
+    const validToMs =
+      isOneTime && (!rawValidToMs || rawValidToMs <= validFromMs)
+        ? validFromMs + 86_400_000
+        : rawValidToMs;
+
+    let contract = await container.contractsModule.createContractUseCase.execute({
       clientId: body.clientId,
       code: body.code,
-      title: body.title,
+      title: body.title || (isOneTime ? "One-Time Engagement" : "Master Service Agreement"),
       amountMinor: Number(body.amountMinor || 0),
       currency: body.currency || "INR",
-      billingCycle: body.billingCycle || "monthly",
+      billingCycle,
       intervalCount: Number(body.intervalCount || 1),
-      anchorDay: Number(body.anchorDay || 1),
-      validFrom: new Date(body.validFrom).getTime(),
-      validTo: new Date(body.validTo).getTime(),
-      autoRenew: Boolean(body.autoRenew),
+      anchorDay: Number(body.anchorDay || new Date(validFromMs).getDate() || 1),
+      validFrom: validFromMs,
+      validTo: validToMs,
+      autoRenew: isOneTime ? false : Boolean(body.autoRenew),
       taxProfile: body.taxProfile || "non_gst",
       notes: body.notes,
       items: body.items,
     });
+
+    if (body.activateImmediately) {
+      try {
+        contract = await container.contractsModule.activateContractUseCase.execute(contract.id);
+        await container.billingModule.generateScheduleUseCase.execute({
+          contractId: contract.id,
+          clientId: contract.clientId,
+          amountMinor: contract.amountMinor,
+          currency: contract.currency,
+          billingCycle: contract.billingCycle,
+          intervalCount: contract.intervalCount,
+          anchorDay: contract.anchorDay,
+          validFrom: contract.validFrom,
+          validTo: contract.validTo,
+          paymentTermsDays: contract.paymentTermsDays,
+        });
+      } catch (actErr) {
+        console.warn("[API] Auto-activation warning:", actErr);
+      }
+    }
 
     return NextResponse.json({ contract: contract.toJSON() }, { status: 201 });
   } catch (error) {

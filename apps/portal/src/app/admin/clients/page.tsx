@@ -15,7 +15,7 @@ export default async function AdminClientsPage() {
 
     initialClients = await Promise.all(
       result.items.map(async (client) => {
-        const [contacts, projects, users, entitlement, billingSummary, processes, domains, tickets] = await Promise.all([
+        const [contacts, projects, users, entitlement, billingSummary, processes, domains, tickets, contractsRes] = await Promise.all([
           container.clientDirectoryRepo.findContactsByClient(client.id),
           container.clientDirectoryRepo.findProjectsByClient(client.id),
           container.clientRepo.findByClientId(client.id),
@@ -30,7 +30,15 @@ export default async function AdminClientsPage() {
           container.pm2ProcessRepo.listByClientId(client.id).catch(() => []),
           container.monitoredDomainRepo.findByClientId(client.id).catch(() => []),
           container.ticketRepo.list({ clientId: client.id }).catch(() => []),
+          container.contractRepo.list({ clientId: client.id, limit: 25 }).catch(() => ({ items: [], total: 0 })),
         ]);
+
+        const sortedContracts = [...contractsRes.items].sort((a: any, b: any) => {
+          const prio = (s: string) => (s === "active" ? 4 : s === "renewed" ? 3 : s === "draft" ? 2 : 1);
+          const diff = prio(b.status) - prio(a.status);
+          return diff !== 0 ? diff : (b.validTo || 0) - (a.validTo || 0);
+        });
+        const primaryContract = sortedContracts[0];
 
         const { ClientHealthService } = await import("@rsl/core/clients");
         const health = ClientHealthService.calculate({
@@ -79,6 +87,22 @@ export default async function AdminClientsPage() {
           addressLine1: client.addressLine1 || undefined,
           contactsCount: contacts.length,
           projectsCount: projects.length,
+          contractsCount: contractsRes.total,
+          activeContract: primaryContract
+            ? {
+                id: primaryContract.id,
+                code: primaryContract.code,
+                title: primaryContract.title,
+                status: primaryContract.status,
+                amountMinor: primaryContract.amountMinor,
+                currency: primaryContract.currency,
+                billingCycle: primaryContract.billingCycle,
+                validFrom: primaryContract.validFrom,
+                validTo: primaryContract.validTo,
+                anchorDay: primaryContract.anchorDay,
+                taxProfile: primaryContract.taxProfile,
+              }
+            : undefined,
           entitlementStatus: (entitlement as any).status,
           entitlementAllowed: (entitlement as any).allowed,
           entitlementReason: (entitlement as any).reason || undefined,

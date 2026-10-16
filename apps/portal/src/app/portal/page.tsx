@@ -11,6 +11,7 @@ import {
   type PortalTicketItem,
   type PortalReleaseItem,
 } from "@/features/portal/portal-dashboard-view";
+import { pickPrimaryClientContract } from "@/lib/contract-tenure";
 
 export const dynamic = "force-dynamic";
 
@@ -186,6 +187,22 @@ export default async function ClientPortalOverviewPage() {
       }
     : undefined;
 
+  const primaryContract = pickPrimaryClientContract(
+    contractsRes.items.map((c: any) => ({
+      id: c.id,
+      code: c.code,
+      title: c.title,
+      status: c.status,
+      billingCycle: c.billingCycle,
+      intervalCount: c.intervalCount,
+      anchorDay: c.anchorDay,
+      validFrom: c.validFrom,
+      validTo: c.validTo,
+      amountMinor: c.amountMinor,
+      currency: c.currency || clientCurrency,
+    }))
+  );
+
   return (
     <PortalDashboardView
       user={{ email: userEmail, role: userRole }}
@@ -216,6 +233,7 @@ export default async function ClientPortalOverviewPage() {
       }}
       recentInvoices={recentInvoices}
       activeContractsCount={contractsRes.total}
+      activeContract={primaryContract}
       processes={processes}
       domains={domains}
       tickets={tickets}

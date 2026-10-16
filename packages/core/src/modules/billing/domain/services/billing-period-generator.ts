@@ -57,15 +57,11 @@ export class BillingPeriodGenerator {
       paymentTermsDays = 15,
     } = input;
 
-    if (validTo <= validFrom) {
-      return [];
-    }
-
-    const validFromKey = toDateKey(validFrom);
-    const validToKey = toDateKey(validTo);
-
     // 1. One-time or Milestone
     if (billingCycle === "one_time" || billingCycle === "milestone") {
+      if (validTo < validFrom) {
+        return [];
+      }
       const dueDate = validFrom + paymentTermsDays * DAY;
       return [
         {
@@ -74,7 +70,7 @@ export class BillingPeriodGenerator {
           clientId,
           periodNumber: 1,
           periodStart: validFrom,
-          periodEnd: validTo,
+          periodEnd: Math.max(validTo, validFrom),
           dueDate,
           amountMinor,
           currency,
@@ -82,6 +78,13 @@ export class BillingPeriodGenerator {
         },
       ];
     }
+
+    if (validTo <= validFrom) {
+      return [];
+    }
+
+    const validFromKey = toDateKey(validFrom);
+    const validToKey = toDateKey(validTo);
 
     // 2. Every N Days
     if (billingCycle === "every_n_days") {

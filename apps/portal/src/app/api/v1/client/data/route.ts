@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
 import { getRequestActor } from "@/lib/auth-actor";
+import { calculateContractTenure, pickPrimaryClientContract } from "@/lib/contract-tenure";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -143,7 +144,7 @@ export async function GET(req: NextRequest) {
       requestedSections.has("payments")
         ? container.billingRepo.listPayments({ clientId }).catch(() => [])
         : Promise.resolve([]),
-      requestedSections.has("contracts")
+      requestedSections.has("contracts") || requestedSections.has("billing")
         ? container.contractRepo.list({ clientId }).catch(() => [])
         : Promise.resolve([]),
       requestedSections.has("fleet")
@@ -182,8 +183,37 @@ export async function GET(req: NextRequest) {
       responseData.gate = gateRecord;
     }
 
+    const rawContractsList =
+      (contractsRes as any)?.items ||
+      (Array.isArray(contractsRes) ? contractsRes : []);
+    const serializedContracts = (serializeEntity(rawContractsList) || []).map((c: any) => ({
+      ...c,
+      calculatedTenure: calculateContractTenure(
+        {
+          billingCycle: c.billingCycle || "monthly",
+          intervalCount: c.intervalCount || 1,
+          anchorDay: c.anchorDay || 1,
+          validFrom: c.validFrom,
+          validTo: c.validTo,
+          amountMinor: c.amountMinor || 0,
+          currency: c.currency || "INR",
+          status: c.status,
+        },
+        nowMs
+      ),
+    }));
+    const primaryContract = pickPrimaryClientContract(serializedContracts);
+
     if (requestedSections.has("billing")) {
-      responseData.billingSummary = billingSummaryRecord;
+      responseData.billingSummary = {
+        ...(billingSummaryRecord || {}),
+        activeContract: primaryContract
+          ? {
+              ...primaryContract,
+              calculatedTenure: calculateContractTenure(primaryContract, nowMs),
+            }
+          : null,
+      };
     }
 
     if (requestedSections.has("invoices")) {
@@ -201,10 +231,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (requestedSections.has("contracts")) {
-      const rawContracts =
-        (contractsRes as any)?.items ||
-        (Array.isArray(contractsRes) ? contractsRes : []);
-      responseData.contracts = serializeEntity(rawContracts);
+      responseData.contracts = serializedContracts;
     }
 
     if (requestedSections.has("fleet")) {

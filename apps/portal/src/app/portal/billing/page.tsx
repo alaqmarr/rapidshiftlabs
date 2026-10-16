@@ -7,7 +7,9 @@ import {
   type InvoiceItem,
   type PaymentItem,
   type BillingSummary,
+  type ActiveContractInfo,
 } from "@/features/billing/portal-billing-view";
+import { pickPrimaryClientContract } from "@/lib/contract-tenure";
 
 export const dynamic = "force-dynamic";
 
@@ -31,13 +33,15 @@ export default async function ClientPortalBillingPage() {
     activeInvoicesCount: 0,
   };
   let nextDueInvoice: InvoiceItem | null = null;
+  let activeContract: ActiveContractInfo | null = null;
 
   try {
-    const [client, invoicesRes, paymentsRes, billingSummary] = await Promise.all([
+    const [client, invoicesRes, paymentsRes, billingSummary, contractsRes] = await Promise.all([
       container.clientDirectoryRepo.findById(clientId),
       container.billingRepo.listInvoices({ clientId, limit: 50 }),
       container.billingRepo.listPayments({ clientId, limit: 50 }),
       container.billingRepo.getBillingSummary(clientId),
+      container.contractRepo.list({ clientId, limit: 20 }),
     ]);
 
     if (client) {
@@ -49,6 +53,26 @@ export default async function ClientPortalBillingPage() {
     }
 
     summary = billingSummary;
+
+    const primaryContract = pickPrimaryClientContract(
+      contractsRes.items.map((c) => ({
+        id: c.id,
+        code: c.code,
+        title: c.title,
+        status: c.status,
+        billingCycle: c.billingCycle,
+        intervalCount: c.intervalCount,
+        anchorDay: c.anchorDay,
+        validFrom: c.validFrom,
+        validTo: c.validTo,
+        amountMinor: c.amountMinor,
+        currency: c.currency,
+      }))
+    );
+
+    if (primaryContract) {
+      activeContract = primaryContract;
+    }
 
     invoices = invoicesRes.items.map((inv) => ({
       id: inv.id,
@@ -90,6 +114,7 @@ export default async function ClientPortalBillingPage() {
       payments={payments}
       summary={summary}
       nextDueInvoice={nextDueInvoice}
+      activeContract={activeContract}
     />
   );
 }

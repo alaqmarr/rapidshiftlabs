@@ -21,6 +21,7 @@ import {
   Award,
 } from "lucide-react";
 import { formatCurrency as kernelFormatCurrency } from "@/lib/currency";
+import { calculateContractTenure, getBillingCycleLabel } from "@/lib/contract-tenure";
 
 export interface ContractItem {
   id: string;
@@ -79,30 +80,16 @@ export function PortalContractsView({ client, contracts }: PortalContractsViewPr
   };
 
   const getMonthlyNormalizedMinor = (c: ContractItem): number => {
-    const interval = Math.max(1, c.intervalCount || 1);
-    switch (c.billingCycle.toLowerCase()) {
-      case "monthly":
-        return Math.round(c.amountMinor / interval);
-      case "quarterly":
-        return Math.round(c.amountMinor / (3 * interval));
-      case "half_yearly":
-        return Math.round(c.amountMinor / (6 * interval));
-      case "yearly":
-        return Math.round(c.amountMinor / (12 * interval));
-      case "one_time":
-      default:
-        return c.amountMinor;
-    }
+    return calculateContractTenure(c, now).monthlyEquivalentMinor;
   };
 
   const getTenureStats = (c: ContractItem) => {
-    const start = c.validFrom || c.createdAt || now;
-    const end = c.validTo || start + 365 * 86400000;
-    const totalDays = Math.max(1, Math.round((end - start) / 86400000));
-    const elapsedDays = Math.max(0, Math.min(totalDays, Math.round((now - start) / 86400000)));
-    const remainingDays = Math.max(0, Math.ceil((end - now) / 86400000));
-    const pct = Math.min(100, Math.max(0, Math.round((elapsedDays / totalDays) * 100)));
-    return { totalDays, elapsedDays, remainingDays, pct };
+    const calc = calculateContractTenure(c, now);
+    return {
+      ...calc,
+      remainingDays: Math.max(0, calc.daysRemaining),
+      pct: calc.progressPct,
+    };
   };
 
   const getStatusBadge = (status: string) => {
@@ -419,41 +406,54 @@ export function PortalContractsView({ client, contracts }: PortalContractsViewPr
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
                           <Calendar className="w-3.5 h-3.5 text-blue-500" />
-                          Contract Tenure Progress ({tenure.elapsedDays}d elapsed / {tenure.remainingDays}d remaining)
+                          {tenure.isOneTime
+                            ? `Calculated Tenure: One-Time Engagement (${tenure.dateRangeLabel})`
+                            : `Calculated Tenure: ${tenure.tenureLabel} (${tenure.elapsedDays}d elapsed / ${tenure.remainingDays}d remaining)`}
                         </span>
                         <span className="font-tech font-bold text-blue-600 dark:text-blue-400">
-                          {tenure.pct}% Completed
+                          {tenure.isOneTime ? "One-Time Delivery" : `${tenure.pct}% Completed`}
                         </span>
                       </div>
-                      <div className="w-full h-2 rounded-full bg-zinc-200 dark:bg-zinc-700 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-blue-600 dark:bg-blue-500 transition-all"
-                          style={{ width: `${tenure.pct}%` }}
-                        />
-                      </div>
+                      {!tenure.isOneTime && (
+                        <div className="w-full h-2 rounded-full bg-zinc-200 dark:bg-zinc-700 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-blue-600 dark:bg-blue-500 transition-all"
+                            style={{ width: `${tenure.pct}%` }}
+                          />
+                        </div>
+                      )}
                     </div>
 
                     {/* Terms & Validity */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs">
                       <div>
-                        <span className="text-zinc-500 text-[11px] block">Agreement Period</span>
+                        <span className="text-zinc-500 text-[11px] block">Agreement Period &amp; Tenure</span>
                         <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                          {formatDate(c.validFrom)} to {formatDate(c.validTo)}
+                          {tenure.dateRangeLabel} ({tenure.shortTenureLabel})
                         </span>
                       </div>
 
                       <div>
-                        <span className="text-zinc-500 text-[11px] block">Renewal Policy</span>
+                        <span className="text-zinc-500 text-[11px] block">Total Contract Value (TCV)</span>
+                        <span className="font-bold font-tech text-emerald-600 dark:text-emerald-400">
+                          {formatCurrency(tenure.totalContractValueMinor, c.currency)}
+                          {!tenure.isOneTime && ` (${tenure.totalCycles} cycles)`}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className="text-zinc-500 text-[11px] block">Next Billing Date</span>
                         <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                          {c.autoRenew ? "Automatic Annual Renewal" : "Manual Renewal Upon Expiry"}
+                          {tenure.nextBillingDateLabel}
                         </span>
                       </div>
 
                       <div>
                         <span className="text-zinc-500 text-[11px] block">Billing Schedule</span>
                         <span className="font-medium text-zinc-800 dark:text-zinc-200 capitalize">
-                          Every {c.intervalCount > 1 ? `${c.intervalCount} ` : ""}
-                          {c.billingCycle} (Due within 15 days)
+                          {tenure.isOneTime
+                            ? "One-Time Fixed Settlement"
+                            : `${getBillingCycleLabel(c.billingCycle, c.intervalCount)} (Anchor Day ${c.anchorDay})`}
                         </span>
                       </div>
                     </div>
@@ -534,32 +534,40 @@ export function PortalContractsView({ client, contracts }: PortalContractsViewPr
               </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
-                <span className="text-zinc-500 block">Cycle Value</span>
-                <span className="font-bold font-tech text-sm text-zinc-900 dark:text-white">
-                  {formatCurrency(summaryModalContract.amountMinor, summaryModalContract.currency)}
-                </span>
-              </div>
-              <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
-                <span className="text-zinc-500 block">Billing Frequency</span>
-                <span className="font-bold font-tech text-sm capitalize text-zinc-900 dark:text-white">
-                  {summaryModalContract.billingCycle.replace(/_/g, " ")}
-                </span>
-              </div>
-              <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
-                <span className="text-zinc-500 block">Tax Regime</span>
-                <span className="font-bold font-tech text-sm uppercase text-blue-600 dark:text-blue-400">
-                  {summaryModalContract.taxProfile === "gst" ? "GST (18%)" : "Non-GST"}
-                </span>
-              </div>
-              <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
-                <span className="text-zinc-500 block">Anchor Day</span>
-                <span className="font-bold font-tech text-sm text-zinc-900 dark:text-white">
-                  Day {summaryModalContract.anchorDay}
-                </span>
-              </div>
-            </div>
+            {(() => {
+              const summaryTenure = getTenureStats(summaryModalContract);
+              return (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
+                    <span className="text-zinc-500 block">
+                      {summaryTenure.isOneTime ? "One-Time Value" : "Cycle Value"}
+                    </span>
+                    <span className="font-bold font-tech text-sm text-zinc-900 dark:text-white">
+                      {formatCurrency(summaryModalContract.amountMinor, summaryModalContract.currency)}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
+                    <span className="text-zinc-500 block">Calculated Tenure</span>
+                    <span className="font-bold font-tech text-sm text-blue-600 dark:text-blue-400">
+                      {summaryTenure.tenureLabel}
+                    </span>
+                    <span className="text-[10px] text-zinc-400 block">{summaryTenure.dateRangeLabel}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
+                    <span className="text-zinc-500 block">Total Value (TCV)</span>
+                    <span className="font-bold font-tech text-sm text-emerald-600 dark:text-emerald-400">
+                      {formatCurrency(summaryTenure.totalContractValueMinor, summaryModalContract.currency)}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
+                    <span className="text-zinc-500 block">Next Billing</span>
+                    <span className="font-bold font-tech text-sm text-zinc-900 dark:text-white">
+                      {summaryTenure.nextBillingDateLabel}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 space-y-2 text-xs">
               <h4 className="font-bold uppercase tracking-wider text-zinc-500">

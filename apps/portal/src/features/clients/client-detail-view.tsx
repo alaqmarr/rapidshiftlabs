@@ -31,6 +31,7 @@ import {
   Search,
   Lock,
   GitBranch,
+  Calendar,
 } from "lucide-react";
 import { useAlert } from "@/components/ui/alert-popup";
 import { IosSpinner } from "@/components/ui/ios-spinner";
@@ -44,6 +45,12 @@ import {
   formatCurrency as kernelFormatCurrency,
   getCurrencySymbol,
 } from "@/lib/currency";
+import {
+  calculateContractTenure,
+  pickPrimaryClientContract,
+  addTenurePresetToDate,
+  toDateInputValue,
+} from "@/lib/contract-tenure";
 
 export interface ClientDetailProps {
   client: {
@@ -72,9 +79,15 @@ export interface ClientDetailProps {
   contracts: Array<{
     id: string;
     code: string;
+    title?: string;
     amountMinor: number;
     currency: string;
     billingCycle: string;
+    intervalCount?: number;
+    anchorDay?: number;
+    autoRenew?: boolean;
+    taxProfile?: string;
+    notes?: string;
     status: string;
     validFrom: number;
     validTo: number;
@@ -204,16 +217,85 @@ export function ClientDetailView({
 
   // Modals for actions on this client page
   const [showContractModal, setShowContractModal] = useState(false);
+  const [editingContractId, setEditingContractId] = useState<string | null>(null);
   const [contractForm, setContractForm] = useState({
     title: "Engineering Retainer & SLA",
+    isOneTime: false,
     amountMajor: "25000",
     billingCycle: "monthly",
     intervalCount: 1,
-    anchorDay: 1,
+    anchorDay: new Date().getDate(),
     validFrom: new Date().toISOString().slice(0, 10),
-    validTo: new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
-    taxProfile: client.billingMode === "gst" ? "gst_18" : "non_gst",
+    validTo: addTenurePresetToDate(new Date().toISOString().slice(0, 10), 12),
+    autoRenew: true,
+    activateImmediately: true,
+    taxProfile: client.billingMode === "gst" ? "gst" : "non_gst",
   });
+
+  const liveModalTenure = calculateContractTenure({
+    billingCycle: contractForm.isOneTime ? "one_time" : contractForm.billingCycle,
+    validFrom: contractForm.validFrom,
+    validTo: contractForm.isOneTime ? contractForm.validFrom : contractForm.validTo,
+    amountMinor: Math.round(Number(contractForm.amountMajor || 0) * 100),
+    intervalCount: Number(contractForm.intervalCount || 1),
+    anchorDay: Number(contractForm.anchorDay || 1),
+    status: "active",
+  });
+
+  const primaryClientContract = pickPrimaryClientContract(contractsList);
+  const primaryClientTenure = primaryClientContract
+    ? calculateContractTenure({
+        billingCycle: primaryClientContract.billingCycle,
+        validFrom: primaryClientContract.validFrom,
+        validTo: primaryClientContract.validTo,
+        amountMinor: primaryClientContract.amountMinor,
+        intervalCount: primaryClientContract.intervalCount,
+        anchorDay: primaryClientContract.anchorDay,
+        status: primaryClientContract.status,
+      })
+    : null;
+
+  const openNewContractModal = () => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    setEditingContractId(null);
+    setContractForm({
+      title: `${client.name} — Engineering Retainer & SLA`,
+      isOneTime: false,
+      amountMajor: "25000",
+      billingCycle: "monthly",
+      intervalCount: 1,
+      anchorDay: new Date().getDate(),
+      validFrom: todayStr,
+      validTo: addTenurePresetToDate(todayStr, 12),
+      autoRenew: true,
+      activateImmediately: true,
+      taxProfile: client.billingMode === "gst" ? "gst" : "non_gst",
+    });
+    setShowContractModal(true);
+  };
+
+  const openEditContractModal = (c: ClientDetailProps["contracts"][number]) => {
+    const isOneTime = c.billingCycle === "one_time" || c.billingCycle === "milestone";
+    const startStr = toDateInputValue(c.validFrom);
+    const endStr = isOneTime
+      ? addTenurePresetToDate(startStr, 12)
+      : toDateInputValue(c.validTo);
+    setEditingContractId(c.id);
+    setContractForm({
+      title: c.title || `${client.name} — ${c.code}`,
+      isOneTime,
+      amountMajor: String(Math.round((c.amountMinor || 0) / 100)),
+      billingCycle: isOneTime ? "monthly" : c.billingCycle === "annual" ? "yearly" : c.billingCycle,
+      intervalCount: c.intervalCount || 1,
+      anchorDay: c.anchorDay || new Date(c.validFrom).getDate() || 1,
+      validFrom: startStr,
+      validTo: endStr,
+      autoRenew: Boolean(c.autoRenew),
+      activateImmediately: c.status === "active",
+      taxProfile: (c.taxProfile || (client.billingMode === "gst" ? "gst" : "non_gst")) as any,
+    });
+    setShowContractModal(true);
+  };
 
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState({
@@ -258,23 +340,86 @@ export function ClientDetailView({
 
   const handleCreateContract = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!contractForm.isOneTime && new Date(contractForm.validTo).getTime() <= new Date(contractForm.validFrom).getTime()) {
+      showError("Invalid Date Range", "For a recurring/term contract, the End Date (Valid To) must be after the Start Date (Valid From).");
+      return;
+    }
     try {
       setSubmitting(true);
       const amountMinor = Math.round(Number(contractForm.amountMajor) * 100);
+      const effectiveCycle = contractForm.isOneTime ? "one_time" : contractForm.billingCycle;
+
+      if (editingContractId) {
+        const res = await fetch(`/api/v1/admin/contracts/${editingContractId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: contractForm.title,
+            isOneTime: contractForm.isOneTime,
+            amountMinor,
+            currency: client.currency || "INR",
+            billingCycle: effectiveCycle,
+            intervalCount: Number(contractForm.intervalCount || 1),
+            anchorDay: Number(contractForm.anchorDay || 1),
+            validFrom: contractForm.validFrom,
+            validTo: contractForm.isOneTime ? contractForm.validFrom : contractForm.validTo,
+            autoRenew: contractForm.isOneTime ? false : contractForm.autoRenew,
+            taxProfile: contractForm.taxProfile === "gst" || contractForm.taxProfile === "gst_18" ? "gst" : "non_gst",
+            status: contractForm.activateImmediately ? "active" : undefined,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to update contract");
+
+        setContractsList((prev) =>
+          prev.map((item) =>
+            item.id === editingContractId
+              ? {
+                  ...item,
+                  title: data.contract.title,
+                  amountMinor: data.contract.amountMinor,
+                  billingCycle: data.contract.billingCycle,
+                  validFrom: data.contract.validFrom,
+                  validTo: data.contract.validTo,
+                  anchorDay: data.contract.anchorDay,
+                  status: data.contract.status,
+                }
+              : item,
+          ),
+        );
+        setShowContractModal(false);
+        setEditingContractId(null);
+
+        showSuccess(
+          "Contract & Tenure Updated",
+          `Updated '${contractForm.title}' (${data.contract.code}) for ${client.name}.`,
+          [
+            { label: "Engagement Mode", value: contractForm.isOneTime ? "One-Time Engagement" : `Recurring (${liveModalTenure.cycleLabel})` },
+            { label: "Calculated Tenure", value: liveModalTenure.tenureLabel },
+            { label: "Date Range", value: liveModalTenure.dateRangeLabel },
+            { label: "Total Contract Value", value: formatCurrency(liveModalTenure.totalContractValueMinor) },
+          ],
+        );
+        return;
+      }
+
       const res = await fetch("/api/v1/admin/contracts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           clientId: client.id,
           title: contractForm.title,
+          isOneTime: contractForm.isOneTime,
           amountMinor,
           currency: client.currency || "INR",
-          billingCycle: contractForm.billingCycle,
+          billingCycle: effectiveCycle,
           intervalCount: Number(contractForm.intervalCount),
           anchorDay: Number(contractForm.anchorDay),
           validFrom: contractForm.validFrom,
-          validTo: contractForm.validTo,
-          taxProfile: contractForm.taxProfile,
+          validTo: contractForm.isOneTime ? contractForm.validFrom : contractForm.validTo,
+          autoRenew: contractForm.isOneTime ? false : contractForm.autoRenew,
+          activateImmediately: contractForm.activateImmediately,
+          taxProfile: contractForm.taxProfile === "gst" || contractForm.taxProfile === "gst_18" ? "gst" : "non_gst",
         }),
       });
       const data = await res.json();
@@ -283,12 +428,14 @@ export function ClientDetailView({
       const newContract = {
         id: data.contract.id,
         code: data.contract.code,
+        title: data.contract.title,
         amountMinor,
         currency: client.currency || "INR",
-        billingCycle: contractForm.billingCycle,
-        status: data.contract.status || "draft",
-        validFrom: new Date(contractForm.validFrom).getTime(),
-        validTo: new Date(contractForm.validTo).getTime(),
+        billingCycle: data.contract.billingCycle || effectiveCycle,
+        anchorDay: data.contract.anchorDay || Number(contractForm.anchorDay),
+        status: data.contract.status || (contractForm.activateImmediately ? "active" : "draft"),
+        validFrom: data.contract.validFrom || new Date(contractForm.validFrom).getTime(),
+        validTo: data.contract.validTo || new Date(contractForm.validTo).getTime(),
         createdAt: Date.now(),
       };
       setContractsList((prev) => [newContract, ...prev]);
@@ -296,20 +443,34 @@ export function ClientDetailView({
 
       showSuccess(
         "Contract Created Successfully",
-        `New contract '${contractForm.title}' (${data.contract.code}) was created for ${client.name}.`,
+        `New contract '${contractForm.title}' (${data.contract.code}) was configured for ${client.name}.`,
         [
           { label: "Contract Code", value: data.contract.code, copyable: true },
-          { label: "Client", value: client.name },
-          { label: "Recurring Value", value: formatCurrency(amountMinor) },
-          { label: "Billing Cycle", value: contractForm.billingCycle.toUpperCase() },
-          { label: "Validity", value: `${contractForm.validFrom} to ${contractForm.validTo}` },
-        ]
+          { label: "Engagement Mode", value: contractForm.isOneTime ? "One-Time Engagement" : `${liveModalTenure.cycleLabel} Retainer` },
+          { label: "Calculated Tenure", value: liveModalTenure.tenureLabel },
+          { label: "Date Window", value: liveModalTenure.dateRangeLabel },
+          { label: "Total Contract Value", value: formatCurrency(liveModalTenure.totalContractValueMinor) },
+        ],
       );
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to create contract";
-      showError("Contract Creation Failed", msg);
+      const msg = err instanceof Error ? err.message : "Failed to save contract";
+      showError("Contract Save Failed", msg);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleActivateClientContract = async (c: ClientDetailProps["contracts"][number]) => {
+    try {
+      const res = await fetch(`/api/v1/admin/contracts/${c.id}/activate`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to activate contract");
+      setContractsList((prev) =>
+        prev.map((item) => (item.id === c.id ? { ...item, status: "active" } : item)),
+      );
+      showSuccess("Contract Activated", `Contract ${c.code} is now active and tracking tenure.`);
+    } catch (err: unknown) {
+      showError("Activation Failed", err instanceof Error ? err.message : "Unable to activate");
     }
   };
 
@@ -912,13 +1073,26 @@ export function ClientDetailView({
             </div>
           </div>
 
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 shadow-sm">
-            <div className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">Active Contracts</div>
-            <div className="text-xl font-bold mt-1 text-zinc-900 dark:text-white">
-              {contractsList.filter((c) => c.status === "active").length}
+          <div
+            onClick={() => setActiveTab("contracts")}
+            className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 shadow-sm hover:border-blue-400 dark:hover:border-blue-600 cursor-pointer transition"
+            title="View & manage client contract tenure"
+          >
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">Contract &amp; Tenure</div>
+              {primaryClientTenure && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded-md font-semibold uppercase bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200/60">
+                  {primaryClientTenure.isOneTime ? "One-Time" : primaryClientTenure.cycleLabel}
+                </span>
+              )}
             </div>
-            <div className="text-[11px] text-zinc-400 mt-1">
-              Total Signed: {contractsList.length}
+            <div className="text-base font-bold mt-1 text-zinc-900 dark:text-white truncate">
+              {primaryClientTenure ? primaryClientTenure.shortTenureLabel : `${contractsList.length} Signed`}
+            </div>
+            <div className="text-[11px] text-zinc-400 mt-1 truncate">
+              {primaryClientTenure
+                ? `${primaryClientTenure.remainingLabel} • ${contractsList.length} total`
+                : "Click to configure tenure"}
             </div>
           </div>
 
@@ -1312,6 +1486,141 @@ export function ClientDetailView({
                 </div>
               )}
             </div>
+            {/* Active Engagement & Contract Tenure Intelligence Card */}
+            <div className="md:col-span-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  <h3 className="font-bold text-sm text-zinc-900 dark:text-white">
+                    Active Engagement &amp; Calculated Contract Tenure
+                  </h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  {primaryClientContract && (
+                    <button
+                      type="button"
+                      onClick={() => openEditContractModal(primaryClientContract)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 transition cursor-pointer"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                      <span>Edit Tenure / Dates</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={openNewContractModal}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>New Contract</span>
+                  </button>
+                </div>
+              </div>
+
+              {primaryClientContract && primaryClientTenure ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                    <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/60 dark:border-zinc-700/60">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                        Engagement Type
+                      </div>
+                      <div className="font-bold text-sm text-zinc-900 dark:text-white mt-1 flex items-center gap-1.5">
+                        <span>
+                          {primaryClientTenure.isOneTime
+                            ? "One-Time Engagement"
+                            : `Recurring (${primaryClientTenure.cycleLabel})`}
+                        </span>
+                      </div>
+                      <div className="text-[11px] font-mono text-zinc-500 mt-0.5">
+                        {primaryClientContract.code} • {primaryClientContract.status.toUpperCase()}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200/60 dark:border-blue-800/40">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+                        Calculated Tenure
+                      </div>
+                      <div className="font-bold text-sm text-zinc-900 dark:text-white mt-1">
+                        {primaryClientTenure.tenureLabel}
+                      </div>
+                      <div className="text-[11px] text-zinc-500 mt-0.5">
+                        {primaryClientTenure.dateRangeLabel}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/60 dark:border-zinc-700/60">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                        {primaryClientTenure.isOneTime ? "One-Time Value" : "Total Contract Value (TCV)"}
+                      </div>
+                      <div className="font-bold text-sm text-emerald-600 dark:text-emerald-400 mt-1 font-mono">
+                        {formatCurrency(primaryClientTenure.totalContractValueMinor, primaryClientContract.currency)}
+                      </div>
+                      <div className="text-[11px] text-zinc-500 mt-0.5">
+                        {primaryClientTenure.isOneTime
+                          ? "Single milestone settlement"
+                          : `${formatCurrency(primaryClientContract.amountMinor, primaryClientContract.currency)} / ${primaryClientTenure.cycleLabel.toLowerCase()} (${primaryClientTenure.totalCycles} cycles)`}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/60 dark:border-zinc-700/60">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                        Next Scheduled Billing
+                      </div>
+                      <div className="font-bold text-sm text-zinc-900 dark:text-white mt-1">
+                        {primaryClientTenure.nextBillingDateLabel}
+                      </div>
+                      <div className="text-[11px] text-zinc-500 mt-0.5">
+                        {primaryClientTenure.remainingLabel}
+                      </div>
+                    </div>
+                  </div>
+
+                  {!primaryClientTenure.isOneTime && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-500 font-medium">
+                          Tenure Progress ({primaryClientTenure.elapsedDays} of {primaryClientTenure.totalDays} days elapsed)
+                        </span>
+                        <span className="font-mono font-bold text-zinc-900 dark:text-white">
+                          {primaryClientTenure.progressPct}% • {primaryClientTenure.remainingLabel}
+                        </span>
+                      </div>
+                      <div className="w-full h-2 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            primaryClientTenure.isExpired
+                              ? "bg-rose-500"
+                              : primaryClientTenure.isExpiringSoon
+                                ? "bg-amber-500"
+                                : "bg-blue-600"
+                          }`}
+                          style={{ width: `${primaryClientTenure.progressPct}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-dashed border-zinc-300 dark:border-zinc-700 text-xs">
+                  <div>
+                    <div className="font-semibold text-zinc-900 dark:text-white">
+                      No Contract or Engagement Tenure Configured Yet
+                    </div>
+                    <div className="text-zinc-500 mt-0.5">
+                      Select whether {client.name} is a One-Time engagement or a Date-Range recurring contract to auto-calculate tenure across all services and embeds.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={openNewContractModal}
+                    className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-lg font-semibold shrink-0 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Configure Contract Tenure
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -1320,15 +1629,17 @@ export function ClientDetailView({
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-bold text-sm">Contracts &amp; Engagements</h3>
-                <p className="text-xs text-zinc-500">Agreed commercial tenure, retainer schedules, and billing cycles.</p>
+                <h3 className="font-bold text-sm">Contracts &amp; Calculated Tenure</h3>
+                <p className="text-xs text-zinc-500">
+                  One-time engagements and date-range contracts with auto-calculated tenure, billing cycles, and total contract value.
+                </p>
               </div>
               <button
-                onClick={() => setShowContractModal(true)}
+                onClick={openNewContractModal}
                 className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-lg text-xs font-semibold transition cursor-pointer shadow-sm"
               >
                 <Plus className="w-3.5 h-3.5" />
-                New Contract
+                New Contract / Tenure
               </button>
             </div>
 
@@ -1336,44 +1647,131 @@ export function ClientDetailView({
               {contractsList.length === 0 ? (
                 <div className="p-8 text-center text-xs text-zinc-500">No contracts registered for this client.</div>
               ) : (
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-zinc-50 dark:bg-zinc-800/60 border-b border-zinc-200 dark:border-zinc-800 text-zinc-500 uppercase font-semibold">
-                    <tr>
-                      <th className="py-3 px-4">Contract Code</th>
-                      <th className="py-3 px-4">Amount</th>
-                      <th className="py-3 px-4">Billing Cycle</th>
-                      <th className="py-3 px-4">Tenure</th>
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4 text-right">Agreement PDF</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                    {contractsList.map((c) => (
-                      <tr key={c.id}>
-                        <td className="py-3 px-4 font-mono font-semibold text-zinc-900 dark:text-white">{c.code}</td>
-                        <td className="py-3 px-4 font-semibold">{formatCurrency(c.amountMinor, c.currency)}</td>
-                        <td className="py-3 px-4 capitalize">{c.billingCycle}</td>
-                        <td className="py-3 px-4 text-zinc-500">{formatDate(c.validFrom)} – {formatDate(c.validTo)}</td>
-                        <td className="py-3 px-4">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800">
-                            {c.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          <a
-                            href={`/api/v1/billing/contracts/${c.id}/pdf`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-[11px] font-medium transition"
-                          >
-                            <FileText className="w-3 h-3" />
-                            PDF
-                          </a>
-                        </td>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-zinc-50 dark:bg-zinc-800/60 border-b border-zinc-200 dark:border-zinc-800 text-zinc-500 uppercase font-semibold">
+                      <tr>
+                        <th className="py-3 px-4">Contract</th>
+                        <th className="py-3 px-4">Engagement Type</th>
+                        <th className="py-3 px-4">Date Range &amp; Calculated Tenure</th>
+                        <th className="py-3 px-4">Cycle &amp; Total Value</th>
+                        <th className="py-3 px-4">Next Billing</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                      {contractsList.map((c) => {
+                        const t = calculateContractTenure({
+                          billingCycle: c.billingCycle,
+                          validFrom: c.validFrom,
+                          validTo: c.validTo,
+                          amountMinor: c.amountMinor,
+                          intervalCount: c.intervalCount,
+                          anchorDay: c.anchorDay,
+                          status: c.status,
+                        });
+                        return (
+                          <tr key={c.id} className="hover:bg-zinc-50/60 dark:hover:bg-zinc-800/40">
+                            <td className="py-3 px-4">
+                              <div className="font-mono font-semibold text-zinc-900 dark:text-white">{c.code}</div>
+                              {c.title && <div className="text-[11px] text-zinc-500 truncate max-w-[200px]">{c.title}</div>}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase ${
+                                  t.isOneTime
+                                    ? "bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800"
+                                    : "bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800"
+                                }`}
+                              >
+                                {t.isOneTime ? "One-Time" : t.cycleLabel}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="font-semibold text-zinc-900 dark:text-white">{t.tenureLabel}</div>
+                              <div className="text-[11px] text-zinc-500">{t.dateRangeLabel}</div>
+                              {!t.isOneTime && (
+                                <div className="mt-1 flex items-center gap-2">
+                                  <div className="w-24 h-1.5 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${
+                                        t.isExpired ? "bg-rose-500" : t.isExpiringSoon ? "bg-amber-500" : "bg-blue-600"
+                                      }`}
+                                      style={{ width: `${t.progressPct}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-[10px] font-mono text-zinc-400">{t.remainingLabel}</span>
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="font-semibold text-zinc-900 dark:text-white font-mono">
+                                {formatCurrency(c.amountMinor, c.currency)}
+                                {!t.isOneTime && (
+                                  <span className="text-[10px] font-normal text-zinc-400">
+                                    /{t.cycleLabel.toLowerCase()}
+                                  </span>
+                                )}
+                              </div>
+                              {!t.isOneTime && (
+                                <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">
+                                  TCV: {formatCurrency(t.totalContractValueMinor, c.currency)} ({t.totalCycles} cycles)
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-zinc-600 dark:text-zinc-300">
+                              {t.nextBillingDateLabel}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
+                                  c.status === "active"
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800"
+                                    : c.status === "draft"
+                                      ? "bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800"
+                                      : "bg-zinc-100 text-zinc-600 border border-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700"
+                                }`}
+                              >
+                                {c.status}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <div className="inline-flex items-center justify-end gap-1.5">
+                                {c.status === "draft" && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleActivateClientContract(c)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 hover:bg-emerald-100 text-[11px] font-semibold transition cursor-pointer"
+                                  >
+                                    Activate
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => openEditContractModal(c)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 hover:bg-zinc-200 text-[11px] font-medium transition cursor-pointer"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                  Edit
+                                </button>
+                                <a
+                                  href={`/api/v1/billing/contracts/${c.id}/pdf`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-[11px] font-medium transition"
+                                >
+                                  <FileText className="w-3 h-3" />
+                                  PDF
+                                </a>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </div>
@@ -2169,26 +2567,94 @@ export function ClientDetailView({
         </div>
       )}
 
-      {/* Contract Creation Modal */}
+      {/* Contract Creation & Tenure Edit Modal */}
       {showContractModal && (
         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-2xl max-w-lg w-full p-6 space-y-4">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-2xl max-w-xl w-full p-6 space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800">
               <div className="flex items-center gap-2">
                 <FileText className="w-5 h-5 text-blue-600" />
-                <h3 className="font-bold text-base text-zinc-900 dark:text-white">Draft Client Contract</h3>
+                <div>
+                  <h3 className="font-bold text-base text-zinc-900 dark:text-white">
+                    {editingContractId ? "Edit Client Contract & Tenure" : "Configure Client Contract & Tenure"}
+                  </h3>
+                  <p className="text-[11px] text-zinc-500">
+                    Choose One-Time or select a Date Range to automatically calculate contract tenure for {client.name}.
+                  </p>
+                </div>
               </div>
               <button
-                onClick={() => setShowContractModal(false)}
+                onClick={() => {
+                  setShowContractModal(false);
+                  setEditingContractId(null);
+                }}
                 className="p-1 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateContract} className="space-y-3.5 text-xs">
+            <form onSubmit={handleCreateContract} className="space-y-4 text-xs">
+              {/* Step 1: One-Time vs Recurring Date-Range Toggle */}
               <div>
-                <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">Contract Title / Description *</label>
+                <label className="block text-zinc-700 dark:text-zinc-300 mb-1.5 font-semibold">
+                  1. Engagement Type (One-Time vs. Date-Range Contract) *
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setContractForm((prev) => ({ ...prev, isOneTime: false }))}
+                    className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                      !contractForm.isOneTime
+                        ? "border-blue-600 bg-blue-50/70 dark:bg-blue-950/40 ring-1 ring-blue-500/40"
+                        : "border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-zinc-900 dark:text-white">Recurring / Date Range</span>
+                      <span
+                        className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                          !contractForm.isOneTime ? "border-blue-600 bg-blue-600" : "border-zinc-400"
+                        }`}
+                      >
+                        {!contractForm.isOneTime && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500 mt-1">
+                      Select a Start &amp; End Date range to auto-calculate tenure &amp; billing cycles.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setContractForm((prev) => ({ ...prev, isOneTime: true }))}
+                    className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                      contractForm.isOneTime
+                        ? "border-blue-600 bg-blue-50/70 dark:bg-blue-950/40 ring-1 ring-blue-500/40"
+                        : "border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-zinc-900 dark:text-white">One-Time Engagement</span>
+                      <span
+                        className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                          contractForm.isOneTime ? "border-blue-600 bg-blue-600" : "border-zinc-400"
+                        }`}
+                      >
+                        {contractForm.isOneTime && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500 mt-1">
+                      Single project or milestone delivery with one-time settlement.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">
+                  Contract Title / Scope Description *
+                </label>
                 <input
                   type="text"
                   required
@@ -2198,59 +2664,215 @@ export function ClientDetailView({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">Recurring Value ({client.currency || "INR"}) *</label>
-                  <input
-                    type="number"
-                    required
-                    min="1"
-                    value={contractForm.amountMajor}
-                    onChange={(e) => setContractForm({ ...contractForm, amountMajor: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold"
-                  />
+              {/* Step 2: Date Range (if not One-Time) or Effective Date (if One-Time) */}
+              {contractForm.isOneTime ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">
+                      One-Time Contract Value ({client.currency || "INR"}) *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      value={contractForm.amountMajor}
+                      onChange={(e) => setContractForm({ ...contractForm, amountMajor: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">
+                      Effective / Engagement Date *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={contractForm.validFrom}
+                      onChange={(e) =>
+                        setContractForm({
+                          ...contractForm,
+                          validFrom: e.target.value,
+                          validTo: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">Billing Cycle</label>
-                  <select
-                    value={contractForm.billingCycle}
-                    onChange={(e) => setContractForm({ ...contractForm, billingCycle: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  >
-                    <option value="monthly">Monthly</option>
-                    <option value="quarterly">Quarterly</option>
-                    <option value="annual">Annual</option>
-                  </select>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="block text-zinc-700 dark:text-zinc-300 font-semibold">
+                      2. Select Contract Date Range (Auto-Calculates Tenure) *
+                    </label>
+                    <div className="flex items-center gap-1">
+                      {[
+                        { label: "+3M", months: 3 },
+                        { label: "+6M", months: 6 },
+                        { label: "+1Y", months: 12 },
+                        { label: "+2Y", months: 24 },
+                        { label: "+3Y", months: 36 },
+                      ].map((preset) => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() =>
+                            setContractForm((prev) => ({
+                              ...prev,
+                              validTo: addTenurePresetToDate(prev.validFrom, preset.months),
+                            }))
+                          }
+                          className="px-2 py-0.5 rounded bg-zinc-100 hover:bg-blue-50 hover:text-blue-600 dark:bg-zinc-800 dark:hover:bg-blue-950/50 text-[10px] font-semibold text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 transition cursor-pointer"
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">
+                        Start Date (Valid From) *
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={contractForm.validFrom}
+                        onChange={(e) => {
+                          const newStart = e.target.value;
+                          const startDay = newStart ? new Date(newStart).getDate() : 1;
+                          setContractForm((prev) => ({
+                            ...prev,
+                            validFrom: newStart,
+                            anchorDay: startDay >= 1 && startDay <= 28 ? startDay : prev.anchorDay,
+                          }));
+                        }}
+                        className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">
+                        End Date (Valid To) *
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={contractForm.validTo}
+                        min={contractForm.validFrom}
+                        onChange={(e) => setContractForm({ ...contractForm, validTo: e.target.value })}
+                        className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">
+                        Value per Cycle ({client.currency || "INR"}) *
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min="1"
+                        value={contractForm.amountMajor}
+                        onChange={(e) => setContractForm({ ...contractForm, amountMajor: e.target.value })}
+                        className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">
+                        Billing Frequency
+                      </label>
+                      <select
+                        value={contractForm.billingCycle}
+                        onChange={(e) => setContractForm({ ...contractForm, billingCycle: e.target.value })}
+                        className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      >
+                        <option value="monthly">Monthly</option>
+                        <option value="quarterly">Quarterly</option>
+                        <option value="half_yearly">Half-Yearly</option>
+                        <option value="yearly">Annual (Yearly)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">
+                        Billing Anchor Day
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="31"
+                        value={contractForm.anchorDay}
+                        onChange={(e) =>
+                          setContractForm({ ...contractForm, anchorDay: Number(e.target.value || 1) })
+                        }
+                        className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Live Auto-Calculated Tenure & Valuation Summary Box */}
+              <div className="p-3.5 rounded-xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200/80 dark:border-blue-800/60 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700 dark:text-blue-300">
+                    Auto-Calculated Tenure &amp; Valuation Preview
+                  </span>
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-blue-600 text-white">
+                    {liveModalTenure.tenureLabel}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1 text-[11px]">
+                  <div>
+                    <div className="text-zinc-500">Effective Window</div>
+                    <div className="font-semibold text-zinc-900 dark:text-white">
+                      {liveModalTenure.dateRangeLabel}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-500">
+                      {contractForm.isOneTime ? "Settlement Mode" : "Billing Cycles in Tenure"}
+                    </div>
+                    <div className="font-semibold text-zinc-900 dark:text-white">
+                      {contractForm.isOneTime
+                        ? "Single Milestone (1x)"
+                        : `${liveModalTenure.totalCycles} ${liveModalTenure.cycleLabel} Cycles`}
+                    </div>
+                  </div>
+                  <div className="col-span-2 sm:col-span-1">
+                    <div className="text-zinc-500">Total Contract Value (TCV)</div>
+                    <div className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                      {formatCurrency(liveModalTenure.totalContractValueMinor)}
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">Valid From *</label>
+              <div className="flex items-center justify-between pt-1">
+                <label className="inline-flex items-center gap-2 cursor-pointer">
                   <input
-                    type="date"
-                    required
-                    value={contractForm.validFrom}
-                    onChange={(e) => setContractForm({ ...contractForm, validFrom: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    type="checkbox"
+                    checked={contractForm.activateImmediately}
+                    onChange={(e) =>
+                      setContractForm({ ...contractForm, activateImmediately: e.target.checked })
+                    }
+                    className="rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
                   />
-                </div>
-                <div>
-                  <label className="block text-zinc-600 dark:text-zinc-400 mb-1 font-medium">Valid To *</label>
-                  <input
-                    type="date"
-                    required
-                    value={contractForm.validTo}
-                    onChange={(e) => setContractForm({ ...contractForm, validTo: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  />
-                </div>
+                  <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                    Set as Active Contract immediately (syncs across all dashboards &amp; embeds)
+                  </span>
+                </label>
               </div>
 
               <div className="flex justify-end gap-2 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                 <button
                   type="button"
-                  onClick={() => setShowContractModal(false)}
+                  onClick={() => {
+                    setShowContractModal(false);
+                    setEditingContractId(null);
+                  }}
                   className="px-3.5 py-2 rounded-lg text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                 >
                   Cancel
@@ -2258,9 +2880,13 @@ export function ClientDetailView({
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold transition"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold transition cursor-pointer"
                 >
-                  {submitting ? "Drafting..." : "Create Contract"}
+                  {submitting
+                    ? "Saving..."
+                    : editingContractId
+                      ? "Save Contract & Tenure"
+                      : "Create Contract"}
                 </button>
               </div>
             </form>

@@ -18,15 +18,38 @@ export async function GET(request: NextRequest) {
 
     const itemsWithDetails = await Promise.all(
       result.items.map(async (client) => {
-        const [contacts, projects, users] = await Promise.all([
+        const [contacts, projects, users, contractsRes] = await Promise.all([
           container.clientDirectoryRepo.findContactsByClient(client.id),
           container.clientDirectoryRepo.findProjectsByClient(client.id),
           container.clientRepo.findByClientId(client.id),
+          container.contractRepo.list({ clientId: client.id, limit: 25 }).catch(() => ({ items: [], total: 0 })),
         ]);
+        const sortedContracts = [...contractsRes.items].sort((a, b) => {
+          const prio = (s: string) => (s === "active" ? 4 : s === "renewed" ? 3 : s === "draft" ? 2 : 1);
+          const diff = prio(b.status) - prio(a.status);
+          return diff !== 0 ? diff : b.validTo - a.validTo;
+        });
+        const primaryContract = sortedContracts[0];
         return {
           ...client.toJSON(),
           contactsCount: contacts.length,
           projectsCount: projects.length,
+          contractsCount: contractsRes.total,
+          activeContract: primaryContract
+            ? {
+                id: primaryContract.id,
+                code: primaryContract.code,
+                title: primaryContract.title,
+                status: primaryContract.status,
+                amountMinor: primaryContract.amountMinor,
+                currency: primaryContract.currency,
+                billingCycle: primaryContract.billingCycle,
+                validFrom: primaryContract.validFrom,
+                validTo: primaryContract.validTo,
+                anchorDay: primaryContract.anchorDay,
+                taxProfile: primaryContract.taxProfile,
+              }
+            : undefined,
           contacts: contacts.map((c) => c.toJSON()),
           projects: projects.map((p) => p.toJSON()),
           portalUsers: users.map((u) => ({
@@ -91,7 +114,64 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    return NextResponse.json({ client: client.toJSON(), portalUser: createdPortalUser }, { status: 201 });
+    let createdContract = null;
+    if (body.createInitialContract && body.contract) {
+      const cInput = body.contract;
+      const isOneTime =
+        Boolean(cInput.isOneTime) ||
+        cInput.billingCycle === "one_time" ||
+        cInput.billingCycle === "milestone";
+      const billingCycle = isOneTime
+        ? "one_time"
+        : cInput.billingCycle === "annual"
+          ? "yearly"
+          : cInput.billingCycle || "monthly";
+      const validFromMs = cInput.validFrom ? new Date(cInput.validFrom).getTime() : Date.now();
+      const rawValidToMs = cInput.validTo ? new Date(cInput.validTo).getTime() : validFromMs + 86_400_000;
+      const validToMs =
+        isOneTime && (!rawValidToMs || rawValidToMs <= validFromMs)
+          ? validFromMs + 86_400_000
+          : rawValidToMs;
+
+      let contract = await container.contractsModule.createContractUseCase.execute({
+        clientId: client.id,
+        title: cInput.title || (isOneTime ? `${client.name} — One-Time Engagement` : `${client.name} — Master Service Agreement`),
+        amountMinor: Number(cInput.amountMinor || 0),
+        currency: body.currency || "INR",
+        billingCycle,
+        intervalCount: Number(cInput.intervalCount || 1),
+        anchorDay: Number(cInput.anchorDay || new Date(validFromMs).getDate() || 1),
+        validFrom: validFromMs,
+        validTo: validToMs,
+        autoRenew: isOneTime ? false : Boolean(cInput.autoRenew),
+        taxProfile: body.billingMode === "gst" ? "gst" : "non_gst",
+        notes: cInput.notes,
+      });
+
+      try {
+        contract = await container.contractsModule.activateContractUseCase.execute(contract.id);
+        await container.billingModule.generateScheduleUseCase.execute({
+          contractId: contract.id,
+          clientId: contract.clientId,
+          amountMinor: contract.amountMinor,
+          currency: contract.currency,
+          billingCycle: contract.billingCycle,
+          intervalCount: contract.intervalCount,
+          anchorDay: contract.anchorDay,
+          validFrom: contract.validFrom,
+          validTo: contract.validTo,
+          paymentTermsDays: contract.paymentTermsDays,
+        });
+      } catch (actErr) {
+        console.warn("[API] Initial contract auto-activation warning:", actErr);
+      }
+      createdContract = contract.toJSON();
+    }
+
+    return NextResponse.json(
+      { client: client.toJSON(), portalUser: createdPortalUser, contract: createdContract },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("[API] Error creating client:", error);
     return NextResponse.json({ error: String(error) }, { status: 400 });

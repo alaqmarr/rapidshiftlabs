@@ -353,7 +353,12 @@ export default async function EmbedWidgetPage({ params, searchParams }: EmbedPag
       const contractRes = await container.contractRepo.list({ clientId: resolvedClientId });
       const rawContracts =
         (contractRes as any)?.items || (Array.isArray(contractRes) ? contractRes : []);
-      contracts = serializeEntity(rawContracts) || [];
+      const serialized = serializeEntity(rawContracts) || [];
+      contracts = serialized.sort((a: any, b: any) => {
+        if (a.status === "active" && b.status !== "active") return -1;
+        if (b.status === "active" && a.status !== "active") return 1;
+        return (b.validFrom || 0) - (a.validFrom || 0);
+      });
     } catch {}
 
     try {
