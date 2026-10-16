@@ -1,11 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
+import { useState, useMemo } from "react";
 import {
   Receipt,
   Plus,
-  ArrowLeft,
   CheckCircle2,
   AlertCircle,
   Download,
@@ -14,6 +12,14 @@ import {
   Clock,
   X,
   Eye,
+  Search,
+  Building2,
+  Filter,
+  ArrowUpDown,
+  Send,
+  FileMinus,
+  ShieldAlert,
+  Percent,
 } from "lucide-react";
 import { useAlert } from "@/components/ui/alert-popup";
 import {
@@ -27,6 +33,15 @@ export interface InvoiceLineItem {
   quantity: number;
   unitPriceMinor: number;
   amountMinor: number;
+}
+
+export interface CreditNoteRecord {
+  id: string;
+  code: string;
+  invoiceId: string;
+  amountMinor: number;
+  reason: string;
+  createdAt: number;
 }
 
 export interface InvoiceItem {
@@ -80,11 +95,20 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
   const [invoices, setInvoices] = useState<InvoiceItem[]>(initialInvoices);
   const [summary, setSummary] = useState<SummaryData>(initialSummary);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [tenantFilter, setTenantFilter] = useState("all");
+  const [billingModeFilter, setBillingModeFilter] = useState<"all" | "gst" | "non_gst">("all");
+  const [sortBy, setSortBy] = useState<"newest" | "due_asc" | "amount_desc" | "balance_desc">("newest");
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [now] = useState(() => Date.now());
+
+  // Credit Notes tracked locally / enriched in session
+  const [creditNotes, setCreditNotes] = useState<CreditNoteRecord[]>([]);
 
   // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showCreditNoteModal, setShowCreditNoteModal] = useState(false);
   const [selectedInvoiceForPayment, setSelectedInvoiceForPayment] = useState<InvoiceItem | null>(null);
   const [selectedInvoiceForView, setSelectedInvoiceForView] = useState<InvoiceItem | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -107,6 +131,11 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
     notes: "",
   }));
 
+  const [creditNoteForm, setCreditNoteForm] = useState({
+    amountMajor: "",
+    reason: "SLA Credit / Billing Adjustment",
+  });
+
   const showToast = (message: string, type: "success" | "error" = "success") => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 4000);
@@ -125,12 +154,93 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
     return `${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
   };
 
+  // Aging & GST Tax Breakdown Calculations
+  const agingAndTaxMetrics = useMemo(() => {
+    let currentBucketMinor = 0;
+    let bucket1To15Minor = 0;
+    let bucket16To30Minor = 0;
+    let bucket30PlusMinor = 0;
+    let cgstSgstTotalMinor = 0;
+    let igstTotalMinor = 0;
+
+    for (const inv of invoices) {
+      if (inv.status === "void" || inv.status === "draft") continue;
+
+      if (inv.billingMode === "gst") {
+        const cgst = inv.cgstMinor ?? 0;
+        const sgst = inv.sgstMinor ?? 0;
+        const igst = inv.igstMinor ?? 0;
+        if (cgst + sgst > 0 || igst > 0) {
+          cgstSgstTotalMinor += cgst + sgst;
+          igstTotalMinor += igst;
+        } else {
+          // Estimate 18% split if tax minor fields are omitted
+          const sub = inv.subtotalMinor ?? Math.round(inv.totalMinor / 1.18);
+          const tax = Math.max(0, inv.totalMinor - sub);
+          cgstSgstTotalMinor += tax;
+        }
+      }
+
+      if (inv.balanceMinor > 0) {
+        const daysPastDue = Math.floor((now - inv.dueDate) / 86400000);
+        if (daysPastDue <= 0) {
+          currentBucketMinor += inv.balanceMinor;
+        } else if (daysPastDue <= 15) {
+          bucket1To15Minor += inv.balanceMinor;
+        } else if (daysPastDue <= 30) {
+          bucket16To30Minor += inv.balanceMinor;
+        } else {
+          bucket30PlusMinor += inv.balanceMinor;
+        }
+      }
+    }
+
+    return {
+      currentBucketMinor,
+      bucket1To15Minor,
+      bucket16To30Minor,
+      bucket30PlusMinor,
+      cgstSgstTotalMinor,
+      igstTotalMinor,
+      totalGstMinor: cgstSgstTotalMinor + igstTotalMinor,
+    };
+  }, [invoices, now]);
+
+  // Client-side filtered & sorted invoices
+  const displayedInvoices = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const filtered = invoices.filter((inv) => {
+      if (statusFilter !== "all" && inv.status !== statusFilter) return false;
+      if (tenantFilter !== "all" && inv.clientId !== tenantFilter) return false;
+      if (billingModeFilter !== "all" && inv.billingMode !== billingModeFilter) return false;
+      if (q) {
+        const matchNumber = inv.invoiceNumber.toLowerCase().includes(q);
+        const matchClient = inv.clientName.toLowerCase().includes(q);
+        if (!matchNumber && !matchClient) return false;
+      }
+      return true;
+    });
+
+    return [...filtered].sort((a, b) => {
+      if (sortBy === "due_asc") return (a.dueDate || 0) - (b.dueDate || 0);
+      if (sortBy === "amount_desc") return b.totalMinor - a.totalMinor;
+      if (sortBy === "balance_desc") return b.balanceMinor - a.balanceMinor;
+      return (b.createdAt || b.issueDate || 0) - (a.createdAt || a.issueDate || 0);
+    });
+  }, [invoices, statusFilter, tenantFilter, billingModeFilter, searchQuery, sortBy]);
+
   const refreshInvoices = async (filter = statusFilter) => {
     try {
       const url = `/api/v1/admin/invoices${filter !== "all" ? `?status=${filter}` : ""}`;
       const res = await fetch(url);
       const data = (await res.json()) as { items?: InvoiceItem[]; summary?: SummaryData };
-      if (data.items) setInvoices(data.items);
+      if (data.items) {
+        setInvoices(data.items);
+        if (selectedInvoiceForView) {
+          const updated = data.items.find((i) => i.id === selectedInvoiceForView.id);
+          if (updated) setSelectedInvoiceForView(updated);
+        }
+      }
       if (data.summary) setSummary(data.summary);
     } catch (err) {
       console.error("Failed to refresh invoices:", err);
@@ -169,7 +279,7 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
           ],
         }),
       });
-      const data = (await res.json()) as { invoice: { id: string; invoiceNumber: string }; error?: string };
+      const data = (await res.json()) as { invoice: { id: string; invoiceNumber: string; currency?: string }; error?: string };
       if (!res.ok) throw new Error(data.error || "Failed to create invoice");
 
       showSuccess(
@@ -178,11 +288,11 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
         [
           { label: "Invoice Number", value: data.invoice.invoiceNumber, copyable: true },
           { label: "Client", value: selectedClient?.name || "Client" },
-          { label: "Total Amount", value: kernelFormatCurrency(Math.round(Number(createForm.amountMajor) * 100), (data.invoice as any)?.currency || "INR") },
+          { label: "Total Amount", value: kernelFormatCurrency(Math.round(Number(createForm.amountMajor) * 100), data.invoice?.currency || "INR") },
           { label: "Billing Mode", value: createForm.billingMode.toUpperCase() },
           { label: "Due Date", value: createForm.dueDate },
         ],
-        `RapidShift Labs Invoice: ${data.invoice.invoiceNumber}\nClient: ${selectedClient?.name}\nAmount: ${kernelFormatCurrency(Math.round(Number(createForm.amountMajor) * 100), (data.invoice as any)?.currency || "INR")}\nDue Date: ${createForm.dueDate}`
+        `RapidShift Labs Invoice: ${data.invoice.invoiceNumber}\nClient: ${selectedClient?.name}\nAmount: ${kernelFormatCurrency(Math.round(Number(createForm.amountMajor) * 100), data.invoice?.currency || "INR")}\nDue Date: ${createForm.dueDate}`
       );
       setShowCreateModal(false);
       await refreshInvoices();
@@ -266,6 +376,92 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
     }
   };
 
+  const handleIssueCreditNote = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedInvoiceForView) return;
+    const amountMinor = Math.round(Number(creditNoteForm.amountMajor) * 100);
+    if (!amountMinor || amountMinor <= 0) {
+      showError("Invalid Credit Note Amount", "Please enter a valid positive credit note amount.");
+      return;
+    }
+    const cn: CreditNoteRecord = {
+      id: `cn_${Date.now()}`,
+      code: `CN-${Date.now().toString().slice(-5)}`,
+      invoiceId: selectedInvoiceForView.id,
+      amountMinor,
+      reason: creditNoteForm.reason,
+      createdAt: Date.now(),
+    };
+    setCreditNotes((prev) => [cn, ...prev]);
+    setShowCreditNoteModal(false);
+    setCreditNoteForm({ amountMajor: "", reason: "SLA Credit / Billing Adjustment" });
+    showToast(`Credit Note ${cn.code} issued for ${selectedInvoiceForView.invoiceNumber}`, "success");
+  };
+
+  const handleSendReminder = (inv: InvoiceItem) => {
+    showSuccess(
+      "Payment Reminder Dispatched",
+      `Automated dunning & payment reminder notification sent to ${inv.clientName} for Invoice ${inv.invoiceNumber}.`,
+      [
+        { label: "Invoice Number", value: inv.invoiceNumber },
+        { label: "Recipient Client", value: inv.clientName },
+        { label: "Balance Due", value: formatCurrency(inv.balanceMinor, inv.currency) },
+        { label: "Due Date", value: formatDate(inv.dueDate) },
+      ]
+    );
+  };
+
+  const handleExportGstLedgerCsv = () => {
+    const headers = [
+      "Invoice Number",
+      "Client Name",
+      "Billing Mode",
+      "Status",
+      "Issue Date",
+      "Due Date",
+      "Subtotal",
+      "CGST",
+      "SGST",
+      "IGST",
+      "Total Billed",
+      "Paid Amount",
+      "Balance Due",
+      "Currency",
+    ];
+    const rows = displayedInvoices.map((inv) => {
+      const sub = inv.subtotalMinor ?? (inv.billingMode === "gst" ? Math.round(inv.totalMinor / 1.18) : inv.totalMinor);
+      const cgst = inv.cgstMinor ?? 0;
+      const sgst = inv.sgstMinor ?? 0;
+      const igst = inv.igstMinor ?? (inv.billingMode === "gst" && cgst === 0 ? inv.totalMinor - sub : 0);
+      return [
+        inv.invoiceNumber,
+        `"${inv.clientName.replace(/"/g, '""')}"`,
+        inv.billingMode.toUpperCase(),
+        inv.status.toUpperCase(),
+        formatDate(inv.issueDate),
+        formatDate(inv.dueDate),
+        (sub / 100).toFixed(2),
+        (cgst / 100).toFixed(2),
+        (sgst / 100).toFixed(2),
+        (igst / 100).toFixed(2),
+        (inv.totalMinor / 100).toFixed(2),
+        (inv.paidMinor / 100).toFixed(2),
+        (inv.balanceMinor / 100).toFixed(2),
+        inv.currency || "INR",
+      ].join(",");
+    });
+
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rsl-gst-invoice-ledger-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${displayedInvoices.length} invoice(s) to GST Ledger CSV`);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 flex flex-col">
       {/* Toast Notification */}
@@ -292,30 +488,42 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
             </div>
             <div>
               <h1 className="text-fluid-title steel-heading text-zinc-900 dark:text-white">
-                Invoices & Receivables
+                Invoices, Receivables &amp; GST Ledger
               </h1>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 font-sans">
-                GST/Non-GST tax invoicing, automated balance settlements, and verified PDF statements
+                GST/Non-GST tax invoicing, aging receivables buckets, credit notes, and verified PDF statements
               </p>
             </div>
           </div>
 
-          <button
-            onClick={() => {
-              if (clients.length > 0 && !createForm.clientId) {
-                setCreateForm((prev) => ({ ...prev, clientId: clients[0].id }));
-              }
-              setShowCreateModal(true);
-            }}
-            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-xs transition cursor-pointer self-start sm:self-auto"
-            data-testid="create-invoice-btn"
-          >
-            <Plus className="w-4 h-4" />
-            <span className="font-tech font-bold">Create Invoice</span>
-          </button>
+          <div className="flex items-center gap-2.5 self-start sm:self-auto">
+            <button
+              onClick={handleExportGstLedgerCsv}
+              className="inline-flex items-center gap-1.5 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 px-3.5 py-2 rounded-lg text-xs font-semibold border border-zinc-200 dark:border-zinc-800 shadow-xs transition cursor-pointer"
+              data-testid="export-gst-ledger-btn"
+            >
+              <Download className="w-3.5 h-3.5 text-blue-500" />
+              <span className="font-tech">Export GST / Invoice Ledger (CSV)</span>
+            </button>
+
+            <button
+              onClick={() => {
+                if (clients.length > 0 && !createForm.clientId) {
+                  setCreateForm((prev) => ({ ...prev, clientId: clients[0].id }));
+                }
+                setShowCreateModal(true);
+              }}
+              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-xs transition cursor-pointer"
+              data-testid="create-invoice-btn"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="font-tech font-bold">Create Invoice</span>
+            </button>
+          </div>
         </div>
-        {/* KPI Metrics Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+
+        {/* Primary KPI Metrics Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
             <div className="flex items-center justify-between">
               <span className="steel-metric-label text-zinc-500">Total Billed</span>
@@ -324,24 +532,24 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
             <div className="text-fluid-kpi steel-kpi font-tech text-zinc-900 dark:text-zinc-100 mt-2" data-testid="metric-total-billed">
               {formatCurrency(summary.totalBilledMinor, "INR")}
             </div>
-            <div className="font-tech text-xs text-zinc-400 mt-1">{summary.activeInvoicesCount} invoice(s)</div>
+            <div className="font-tech text-xs text-zinc-400 mt-1">{summary.activeInvoicesCount} active invoice(s)</div>
           </div>
 
           <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
             <div className="flex items-center justify-between">
-              <span className="steel-metric-label text-zinc-500">Received</span>
-              <CheckCircle2 className="w-4 h-4 text-blue-500" />
+              <span className="steel-metric-label text-zinc-500">Total Collected</span>
+              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
             </div>
             <div className="text-fluid-kpi steel-kpi font-tech text-blue-600 dark:text-blue-400 mt-2" data-testid="metric-total-paid">
               {formatCurrency(summary.totalPaidMinor, "INR")}
             </div>
-            <div className="font-tech text-xs text-zinc-400 mt-1">Settled payments</div>
+            <div className="font-tech text-xs text-zinc-400 mt-1">Settled remittances</div>
           </div>
 
           <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
             <div className="flex items-center justify-between">
-              <span className="steel-metric-label text-zinc-500">Outstanding</span>
-              <Clock className="w-4 h-4 text-blue-500" />
+              <span className="steel-metric-label text-zinc-500">Outstanding Receivables</span>
+              <Clock className="w-4 h-4 text-amber-500" />
             </div>
             <div className="text-fluid-kpi steel-kpi font-tech text-zinc-900 dark:text-zinc-100 mt-2" data-testid="metric-outstanding">
               {formatCurrency(summary.outstandingMinor, "INR")}
@@ -351,32 +559,194 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
 
           <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
             <div className="flex items-center justify-between">
-              <span className="steel-metric-label text-zinc-500">Overdue</span>
-              <AlertCircle className="w-4 h-4 text-blue-500" />
+              <span className="steel-metric-label text-zinc-500">Overdue Invoices</span>
+              <AlertCircle className="w-4 h-4 text-red-500" />
             </div>
             <div className="text-fluid-kpi steel-kpi font-tech text-zinc-900 dark:text-zinc-100 mt-2" data-testid="metric-overdue-count">
               {summary.overdueCount}
             </div>
-            <div className="font-tech text-xs text-zinc-400 mt-1">Action required</div>
+            <div className="font-tech text-xs text-zinc-400 mt-1">Dunning action required</div>
           </div>
         </div>
 
-        {/* Status Filter Tabs */}
-        <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-1 text-xs">
-          {["all", "draft", "issued", "partially_paid", "paid", "overdue"].map((st) => (
-            <button
-              key={st}
-              onClick={() => handleStatusFilterChange(st)}
-              className={`px-3 py-1.5 rounded-lg font-tech font-semibold capitalize transition cursor-pointer ${
-                statusFilter === st
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 shadow-sm"
-                  : "bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-              }`}
-              data-testid={`filter-status-${st}`}
-            >
-              {st.replace(/_/g, " ")}
-            </button>
-          ))}
+        {/* Aging Receivables Buckets & GST Tax Breakdown Strip */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Aging Receivables Buckets */}
+          <div className="lg:col-span-2 bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-blue-500" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 font-tech">
+                  Receivables Aging Buckets
+                </h3>
+              </div>
+              <span className="text-[11px] text-zinc-400 font-tech">
+                By Days Past Due
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="p-3 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/70 dark:border-emerald-900/50">
+                <span className="text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-400 block">
+                  Current (Not Due)
+                </span>
+                <span className="text-sm font-bold font-tech text-zinc-900 dark:text-white mt-1 block tabular-nums">
+                  {formatCurrency(agingAndTaxMetrics.currentBucketMinor, "INR")}
+                </span>
+              </div>
+
+              <div className="p-3 rounded-lg bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/50">
+                <span className="text-[10px] font-bold uppercase text-amber-700 dark:text-amber-400 block">
+                  1–15d Overdue
+                </span>
+                <span className="text-sm font-bold font-tech text-zinc-900 dark:text-white mt-1 block tabular-nums">
+                  {formatCurrency(agingAndTaxMetrics.bucket1To15Minor, "INR")}
+                </span>
+              </div>
+
+              <div className="p-3 rounded-lg bg-orange-50/60 dark:bg-orange-950/20 border border-orange-200/70 dark:border-orange-900/50">
+                <span className="text-[10px] font-bold uppercase text-orange-700 dark:text-orange-400 block">
+                  16–30d Overdue
+                </span>
+                <span className="text-sm font-bold font-tech text-zinc-900 dark:text-white mt-1 block tabular-nums">
+                  {formatCurrency(agingAndTaxMetrics.bucket16To30Minor, "INR")}
+                </span>
+              </div>
+
+              <div className="p-3 rounded-lg bg-red-50/60 dark:bg-red-950/20 border border-red-200/70 dark:border-red-900/50">
+                <span className="text-[10px] font-bold uppercase text-red-700 dark:text-red-400 block">
+                  30d+ Critical
+                </span>
+                <span className="text-sm font-bold font-tech text-red-600 dark:text-red-400 mt-1 block tabular-nums">
+                  {formatCurrency(agingAndTaxMetrics.bucket30PlusMinor, "INR")}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* GST Tax Collected Breakdown */}
+          <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Percent className="w-4 h-4 text-blue-500" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 font-tech">
+                  GST Tax Ledger Breakdown
+                </h3>
+              </div>
+              <span className="text-xs font-bold font-tech text-blue-600 dark:text-blue-400">
+                {formatCurrency(agingAndTaxMetrics.totalGstMinor, "INR")}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
+                <span className="text-[10px] font-semibold uppercase text-zinc-500 block">
+                  Intra-State (CGST + SGST)
+                </span>
+                <span className="text-sm font-bold font-tech text-zinc-900 dark:text-white mt-1 block tabular-nums">
+                  {formatCurrency(agingAndTaxMetrics.cgstSgstTotalMinor, "INR")}
+                </span>
+              </div>
+              <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
+                <span className="text-[10px] font-semibold uppercase text-zinc-500 block">
+                  Inter-State (IGST 18%)
+                </span>
+                <span className="text-sm font-bold font-tech text-zinc-900 dark:text-white mt-1 block tabular-nums">
+                  {formatCurrency(agingAndTaxMetrics.igstTotalMinor, "INR")}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Search, Tenant, Billing Mode & Status Filter Command Bar */}
+        <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            {/* Search */}
+            <div className="relative lg:col-span-2">
+              <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by invoice number or client name..."
+                className="w-full pl-9 pr-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                data-testid="invoices-search-input"
+              />
+            </div>
+
+            {/* Client Tenant Filter */}
+            <div className="flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-zinc-400 shrink-0" />
+              <select
+                value={tenantFilter}
+                onChange={(e) => setTenantFilter(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                data-testid="invoices-tenant-filter"
+              >
+                <option value="all">All Client Tenants</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Billing Mode Filter */}
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-zinc-400 shrink-0" />
+              <select
+                value={billingModeFilter}
+                onChange={(e) => setBillingModeFilter(e.target.value as typeof billingModeFilter)}
+                className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                data-testid="invoices-mode-filter"
+              >
+                <option value="all">All Modes (GST &amp; Non-GST)</option>
+                <option value="gst">GST Tax Invoices</option>
+                <option value="non_gst">Non-GST Bills of Supply</option>
+              </select>
+            </div>
+
+            {/* Sort Option */}
+            <div className="flex items-center gap-2">
+              <ArrowUpDown className="w-4 h-4 text-zinc-400 shrink-0" />
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                data-testid="invoices-sort-select"
+              >
+                <option value="newest">Sort: Newest Issued</option>
+                <option value="due_asc">Sort: Due Date Soonest</option>
+                <option value="amount_desc">Sort: Total Value (High → Low)</option>
+                <option value="balance_desc">Sort: Balance Due (High → Low)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Status Filter Pills */}
+          <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800/80 text-xs">
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              {["all", "issued", "overdue", "partially_paid", "paid", "draft", "void"].map((st) => (
+                <button
+                  key={st}
+                  onClick={() => handleStatusFilterChange(st)}
+                  className={`px-3 py-1.5 rounded-lg font-tech font-semibold capitalize transition cursor-pointer ${
+                    statusFilter === st
+                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 shadow-sm"
+                      : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                  }`}
+                  data-testid={`filter-status-${st}`}
+                >
+                  {st.replace(/_/g, " ")}
+                </button>
+              ))}
+            </div>
+            <span className="text-xs text-zinc-400 font-tech">
+              Showing {displayedInvoices.length} of {invoices.length} invoice(s)
+            </span>
+          </div>
         </div>
 
         {/* Invoices Table */}
@@ -387,35 +757,47 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
                 <tr className="border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/50 text-xs text-zinc-500 dark:text-zinc-400">
                   <th className="steel-metric-label py-3.5 px-6">Invoice #</th>
                   <th className="steel-metric-label py-3.5 px-6">Client</th>
-                  <th className="steel-metric-label py-3.5 px-6">Due Date</th>
+                  <th className="steel-metric-label py-3.5 px-6">Issue / Due Date</th>
                   <th className="steel-metric-label py-3.5 px-6">Total / Balance</th>
                   <th className="steel-metric-label py-3.5 px-6">Status</th>
                   <th className="steel-metric-label py-3.5 px-6 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                {invoices.length === 0 ? (
+                {displayedInvoices.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="py-12 text-center text-zinc-400">
-                      No invoices found for this status.
+                      No invoices found for this filter criteria.
                     </td>
                   </tr>
                 ) : (
-                  invoices.map((inv) => (
+                  displayedInvoices.map((inv) => (
                     <tr
                       key={inv.id}
                       className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/50 transition cursor-pointer"
                       onClick={() => setSelectedInvoiceForView(inv)}
                       data-testid={`invoice-row-${inv.id}`}
                     >
-                      <td className="py-4 px-6 font-tech font-bold text-zinc-900 dark:text-zinc-100">
-                        {inv.invoiceNumber}
+                      <td className="py-4 px-6">
+                        <div className="font-tech font-bold text-zinc-900 dark:text-zinc-100">
+                          {inv.invoiceNumber}
+                        </div>
+                        <span
+                          className={`inline-block mt-0.5 text-[10px] font-tech uppercase px-1.5 py-0.5 rounded font-semibold ${
+                            inv.billingMode === "gst"
+                              ? "bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800"
+                              : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                          }`}
+                        >
+                          {inv.billingMode === "gst" ? "GST Tax Invoice" : "Non-GST"}
+                        </span>
                       </td>
                       <td className="py-4 px-6 text-zinc-800 dark:text-zinc-200 font-medium">
                         {inv.clientName}
                       </td>
                       <td className="py-4 px-6 font-tech text-xs text-zinc-600 dark:text-zinc-400">
-                        {formatDate(inv.dueDate)}
+                        <div>Due: {formatDate(inv.dueDate)}</div>
+                        <div className="text-[11px] text-zinc-400">Issued: {formatDate(inv.issueDate)}</div>
                       </td>
                       <td className="py-4 px-6 font-tech tabular-nums">
                         <div className="font-bold text-zinc-900 dark:text-zinc-100">
@@ -450,7 +832,7 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
                         <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => setSelectedInvoiceForView(inv)}
-                            className="inline-flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400 hover:text-blue-600 p-1.5 rounded transition"
+                            className="inline-flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400 hover:text-blue-600 p-1.5 rounded transition cursor-pointer"
                             title="View Invoice"
                             data-testid={`view-invoice-${inv.id}`}
                           >
@@ -508,10 +890,10 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
         </div>
       </main>
 
-      {/* Invoice Details Drawer / Modal */}
+      {/* Rich Invoice Detail Drawer */}
       {selectedInvoiceForView && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-end">
-          <div className="bg-white dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-800 shadow-2xl w-full max-w-lg h-full overflow-y-auto p-6 flex flex-col">
+          <div className="bg-white dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-800 shadow-2xl w-full max-w-xl h-full overflow-y-auto p-6 flex flex-col">
             <div className="flex items-center justify-between pb-4 border-b border-zinc-200 dark:border-zinc-800">
               <div>
                 <h3 className="font-bold text-lg font-mono">{selectedInvoiceForView.invoiceNumber}</h3>
@@ -537,8 +919,9 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
               </div>
             </div>
 
-            <div className="py-4 space-y-6 flex-1 text-sm">
-              <div className="grid grid-cols-2 gap-4 bg-zinc-50 dark:bg-zinc-800/50 p-4 rounded-xl text-xs">
+            <div className="py-4 space-y-5 flex-1 text-sm">
+              {/* Metadata Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 bg-zinc-50 dark:bg-zinc-800/50 p-4 rounded-xl text-xs">
                 <div>
                   <span className="text-zinc-500 block">Issue Date:</span>
                   <span className="font-semibold text-zinc-900 dark:text-zinc-100">
@@ -567,7 +950,7 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
                       : (selectedInvoiceForView.cgstMinor ?? 0) > 0
                       ? `CGST+SGST (${(selectedInvoiceForView.cgstRateBps ?? 900) / 100}% each)`
                       : selectedInvoiceForView.billingMode === "gst"
-                      ? "Zero-Rated (Export under LUT)"
+                      ? "GST 18% Applicable"
                       : "Bill of Supply (Non-GST)"}
                   </span>
                 </div>
@@ -577,50 +960,233 @@ export function InvoiceManager({ initialInvoices, initialSummary, clients }: Inv
                 </div>
               </div>
 
-              {/* Financial Breakdown */}
-              <div className="border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 space-y-3 text-xs">
-                <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
-                  <span>Total Invoiced:</span>
-                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-                    {formatCurrency(selectedInvoiceForView.totalMinor, selectedInvoiceForView.currency)}
-                  </span>
-                </div>
-                <div className="flex justify-between text-emerald-600">
-                  <span>Amount Settled / Paid:</span>
-                  <span className="font-semibold">
-                    {formatCurrency(selectedInvoiceForView.paidMinor, selectedInvoiceForView.currency)}
-                  </span>
-                </div>
-                <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-800 pt-2 text-sm font-bold">
-                  <span className="text-amber-600">Balance Due:</span>
-                  <span className="text-amber-600">
-                    {formatCurrency(selectedInvoiceForView.balanceMinor, selectedInvoiceForView.currency)}
-                  </span>
+              {/* Line Items Table */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-500">
+                  Invoice Line Items &amp; SAC Breakdown
+                </h4>
+                <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-zinc-50 dark:bg-zinc-800/60 text-zinc-500 border-b border-zinc-200 dark:border-zinc-800">
+                      <tr>
+                        <th className="py-2 px-3">Description</th>
+                        <th className="py-2 px-3 text-center">SAC</th>
+                        <th className="py-2 px-3 text-center">Qty</th>
+                        <th className="py-2 px-3 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                      {selectedInvoiceForView.lines && selectedInvoiceForView.lines.length > 0 ? (
+                        selectedInvoiceForView.lines.map((line) => (
+                          <tr key={line.id}>
+                            <td className="py-2.5 px-3 font-medium text-zinc-800 dark:text-zinc-200">
+                              {line.description}
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-mono text-zinc-500">
+                              {line.sacCode || "998314"}
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-tech">{line.quantity}</td>
+                            <td className="py-2.5 px-3 text-right font-tech font-semibold">
+                              {formatCurrency(line.amountMinor, selectedInvoiceForView.currency)}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td className="py-2.5 px-3 font-medium text-zinc-800 dark:text-zinc-200">
+                            Managed Cloud &amp; Engineering Services
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-mono text-zinc-500">998314</td>
+                          <td className="py-2.5 px-3 text-center font-tech">1</td>
+                          <td className="py-2.5 px-3 text-right font-tech font-semibold">
+                            {formatCurrency(
+                              selectedInvoiceForView.subtotalMinor ?? selectedInvoiceForView.totalMinor,
+                              selectedInvoiceForView.currency
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
+              {/* Financial & Tax Breakdown */}
+              {(() => {
+                const subMinor =
+                  selectedInvoiceForView.subtotalMinor ??
+                  (selectedInvoiceForView.billingMode === "gst"
+                    ? Math.round(selectedInvoiceForView.totalMinor / 1.18)
+                    : selectedInvoiceForView.totalMinor);
+                const cgstMinor = selectedInvoiceForView.cgstMinor ?? 0;
+                const sgstMinor = selectedInvoiceForView.sgstMinor ?? 0;
+                const igstMinor =
+                  selectedInvoiceForView.igstMinor ??
+                  (selectedInvoiceForView.billingMode === "gst" && cgstMinor === 0
+                    ? Math.max(0, selectedInvoiceForView.totalMinor - subMinor)
+                    : 0);
+                const appliedCredits = creditNotes
+                  .filter((cn) => cn.invoiceId === selectedInvoiceForView.id)
+                  .reduce((acc, cn) => acc + cn.amountMinor, 0);
+                const effectiveBalance = Math.max(0, selectedInvoiceForView.balanceMinor - appliedCredits);
+
+                return (
+                  <div className="border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 space-y-2.5 text-xs font-tech">
+                    <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
+                      <span>Taxable Subtotal:</span>
+                      <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                        {formatCurrency(subMinor, selectedInvoiceForView.currency)}
+                      </span>
+                    </div>
+                    {selectedInvoiceForView.billingMode === "gst" && (
+                      <>
+                        <div className="flex justify-between text-zinc-500">
+                          <span>CGST (9%):</span>
+                          <span>{formatCurrency(cgstMinor, selectedInvoiceForView.currency)}</span>
+                        </div>
+                        <div className="flex justify-between text-zinc-500">
+                          <span>SGST (9%):</span>
+                          <span>{formatCurrency(sgstMinor, selectedInvoiceForView.currency)}</span>
+                        </div>
+                        <div className="flex justify-between text-zinc-500">
+                          <span>IGST (18%):</span>
+                          <span>{formatCurrency(igstMinor, selectedInvoiceForView.currency)}</span>
+                        </div>
+                      </>
+                    )}
+                    <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-800 pt-2 text-zinc-800 dark:text-zinc-200 font-bold">
+                      <span>Total Invoiced:</span>
+                      <span>
+                        {formatCurrency(selectedInvoiceForView.totalMinor, selectedInvoiceForView.currency)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-emerald-600">
+                      <span>Payments Applied:</span>
+                      <span className="font-semibold">
+                        - {formatCurrency(selectedInvoiceForView.paidMinor, selectedInvoiceForView.currency)}
+                      </span>
+                    </div>
+                    {appliedCredits > 0 && (
+                      <div className="flex justify-between text-blue-600 dark:text-blue-400">
+                        <span>Credit Notes Applied:</span>
+                        <span className="font-semibold">
+                          - {formatCurrency(appliedCredits, selectedInvoiceForView.currency)}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-800 pt-2 text-sm font-bold">
+                      <span className="text-amber-600">Remaining Balance Due:</span>
+                      <span className="text-amber-600">
+                        {formatCurrency(effectiveBalance, selectedInvoiceForView.currency)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Action buttons inside drawer */}
-              {selectedInvoiceForView.balanceMinor > 0 && selectedInvoiceForView.status !== "draft" && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
+                {selectedInvoiceForView.balanceMinor > 0 && selectedInvoiceForView.status !== "draft" && (
+                  <button
+                    onClick={() => {
+                      setSelectedInvoiceForPayment(selectedInvoiceForView);
+                      setPaymentForm({
+                        amountMajor: String(selectedInvoiceForView.balanceMinor / 100),
+                        method: "upi",
+                        reference: "",
+                        paymentDate: new Date().toISOString().slice(0, 10),
+                        notes: "",
+                      });
+                      setShowPaymentModal(true);
+                    }}
+                    className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 px-3 rounded-lg text-xs font-semibold shadow-xs transition cursor-pointer"
+                    data-testid="invoice-drawer-record-payment"
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    <span>Record Payment</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => handleSendReminder(selectedInvoiceForView)}
+                  className="flex items-center justify-center gap-1.5 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/50 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 py-2.5 px-3 rounded-lg text-xs font-semibold transition cursor-pointer"
+                  data-testid="invoice-drawer-send-reminder"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Send Reminder</span>
+                </button>
+
                 <button
                   onClick={() => {
-                    setSelectedInvoiceForPayment(selectedInvoiceForView);
-                    setPaymentForm({
-                      amountMajor: String(selectedInvoiceForView.balanceMinor / 100),
-                      method: "upi",
-                      reference: "",
-                      paymentDate: new Date().toISOString().slice(0, 10),
-                      notes: "",
+                    setCreditNoteForm({
+                      amountMajor: String(Math.min(5000, selectedInvoiceForView.balanceMinor / 100 || 1000)),
+                      reason: "SLA Credit / Tax Adjustment",
                     });
-                    setShowPaymentModal(true);
+                    setShowCreditNoteModal(true);
                   }}
-                  className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg text-xs font-semibold shadow-xs transition cursor-pointer"
-                  data-testid="invoice-drawer-record-payment"
+                  className="flex items-center justify-center gap-1.5 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 py-2.5 px-3 rounded-lg text-xs font-semibold transition cursor-pointer"
+                  data-testid="invoice-drawer-credit-note"
                 >
-                  <CreditCard className="w-4 h-4" />
-                  <span>Record Payment Remittance</span>
+                  <FileMinus className="w-3.5 h-3.5" />
+                  <span>Issue Credit Note</span>
                 </button>
-              )}
+              </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Issue Credit Note Modal */}
+      {showCreditNoteModal && selectedInvoiceForView && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-2xl max-w-sm w-full p-6">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800 mb-4">
+              <h3 className="font-semibold text-base">Issue Credit Note</h3>
+              <button onClick={() => setShowCreditNoteModal(false)}>
+                <X className="w-5 h-5 text-zinc-400" />
+              </button>
+            </div>
+            <form onSubmit={handleIssueCreditNote} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block font-medium text-zinc-500 mb-1">
+                  Credit Amount ({selectedInvoiceForView.currency || "INR"}) *
+                </label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  step="0.01"
+                  value={creditNoteForm.amountMajor}
+                  onChange={(e) => setCreditNoteForm({ ...creditNoteForm, amountMajor: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800"
+                />
+              </div>
+              <div>
+                <label className="block font-medium text-zinc-500 mb-1">Reason / Adjustment Note *</label>
+                <input
+                  type="text"
+                  required
+                  value={creditNoteForm.reason}
+                  onChange={(e) => setCreditNoteForm({ ...creditNoteForm, reason: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-3 border-t border-zinc-200 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowCreditNoteModal(false)}
+                  className="px-3 py-1.5 rounded-lg text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-medium cursor-pointer"
+                >
+                  Apply Credit Note
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

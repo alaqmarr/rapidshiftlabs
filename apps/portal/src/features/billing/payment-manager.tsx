@@ -1,10 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import {
   CreditCard,
-  ArrowLeft,
   Plus,
   Receipt,
   DollarSign,
@@ -14,6 +13,13 @@ import {
   AlertCircle,
   X,
   FileCheck,
+  Search,
+  Download,
+  ArrowUpDown,
+  Eye,
+  Printer,
+  Calendar,
+  BarChart3,
 } from "lucide-react";
 import { useAlert } from "@/components/ui/alert-popup";
 import { IosSpinner } from "@/components/ui/ios-spinner";
@@ -53,6 +59,9 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
   const [payments, setPayments] = useState<PaymentItem[]>(initialPayments);
   const [invoices, setInvoices] = useState<InvoiceOption[]>(initialInvoiceOptions);
   const [methodFilter, setMethodFilter] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState<"date_desc" | "date_asc" | "amount_desc" | "amount_asc">("date_desc");
+  const [selectedReceipt, setSelectedReceipt] = useState<PaymentItem | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   // Record Payment Modal
@@ -145,11 +154,11 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
 
       showSuccess(
         "Settlement Recorded Successfully",
-        `Payment of ${formatCurrency(amountMinor, (targetInvoice as any)?.currency || "INR")} was successfully recorded and credited against ${targetInvoice?.invoiceNumber || "Invoice"}.`,
+        `Payment of ${formatCurrency(amountMinor, (targetInvoice as { currency?: string })?.currency || "INR")} was successfully recorded and credited against ${targetInvoice?.invoiceNumber || "Invoice"}.`,
         [
           { label: "Invoice Number", value: targetInvoice?.invoiceNumber || "Invoice" },
           { label: "Client", value: targetInvoice?.clientName || "Client" },
-          { label: "Amount Settled", value: formatCurrency(amountMinor, (targetInvoice as any)?.currency || "INR") },
+          { label: "Amount Settled", value: formatCurrency(amountMinor, (targetInvoice as { currency?: string })?.currency || "INR") },
           { label: "Payment Mode", value: paymentForm.method.toUpperCase() },
           ...(paymentForm.reference ? [{ label: "UTR / Reference", value: paymentForm.reference, copyable: true }] : []),
           { label: "Payment Date", value: paymentForm.paymentDate },
@@ -173,16 +182,96 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
     }
   };
 
-  // Metrics
+  // Collection Velocity & Method Breakdown Metrics
   const totalCollectedMinor = payments.reduce((acc, p) => acc + p.amountMinor, 0);
-  const upiCount = payments.filter((p) => p.method === "upi").length;
-  const bankCount = payments.filter((p) => ["neft", "rtgs", "bank_transfer"].includes(p.method)).length;
+  const upiPayments = payments.filter((p) => p.method.toLowerCase() === "upi");
+  const bankPayments = payments.filter((p) => ["neft", "rtgs", "bank_transfer"].includes(p.method.toLowerCase()));
+  const cardPayments = payments.filter((p) => p.method.toLowerCase() === "card");
+  const upiCount = upiPayments.length;
+  const bankCount = bankPayments.length;
 
-  const filteredPayments = payments.filter((p) => {
-    if (methodFilter === "all") return true;
-    return p.method.toLowerCase() === methodFilter.toLowerCase();
-  });
+  const avgPaymentMinor = payments.length > 0 ? Math.round(totalCollectedMinor / payments.length) : 0;
 
+  const thisMonthCollectionsMinor = useMemo(() => {
+    const nowDate = new Date();
+    const curYear = nowDate.getFullYear();
+    const curMonth = nowDate.getMonth();
+    return payments
+      .filter((p) => {
+        const d = new Date(p.paymentDate);
+        return d.getFullYear() === curYear && d.getMonth() === curMonth;
+      })
+      .reduce((acc, p) => acc + p.amountMinor, 0);
+  }, [payments]);
+
+  const methodBreakdown = useMemo(() => {
+    const upiMinor = upiPayments.reduce((acc, p) => acc + p.amountMinor, 0);
+    const bankMinor = bankPayments.reduce((acc, p) => acc + p.amountMinor, 0);
+    const cardMinor = cardPayments.reduce((acc, p) => acc + p.amountMinor, 0);
+    const otherMinor = Math.max(0, totalCollectedMinor - upiMinor - bankMinor - cardMinor);
+    return { upiMinor, bankMinor, cardMinor, otherMinor };
+  }, [upiPayments, bankPayments, cardPayments, totalCollectedMinor]);
+
+  const filteredPayments = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const list = payments.filter((p) => {
+      if (methodFilter !== "all" && p.method.toLowerCase() !== methodFilter.toLowerCase()) {
+        return false;
+      }
+      if (q) {
+        const matchRef = (p.reference || "").toLowerCase().includes(q);
+        const matchInv = p.invoiceNumber.toLowerCase().includes(q);
+        const matchClient = p.clientName.toLowerCase().includes(q);
+        const matchId = p.id.toLowerCase().includes(q);
+        if (!matchRef && !matchInv && !matchClient && !matchId) return false;
+      }
+      return true;
+    });
+
+    return [...list].sort((a, b) => {
+      if (sortBy === "date_asc") return (a.paymentDate || 0) - (b.paymentDate || 0);
+      if (sortBy === "amount_desc") return b.amountMinor - a.amountMinor;
+      if (sortBy === "amount_asc") return a.amountMinor - b.amountMinor;
+      return (b.paymentDate || 0) - (a.paymentDate || 0);
+    });
+  }, [payments, methodFilter, searchQuery, sortBy]);
+
+  const handleExportReconciliationCsv = () => {
+    const headers = [
+      "Receipt ID",
+      "Payment Date",
+      "Client Name",
+      "Invoice Number",
+      "Method",
+      "UTR / Reference",
+      "Amount (INR)",
+      "Recorded By",
+      "Notes",
+    ];
+    const rows = filteredPayments.map((p) =>
+      [
+        p.id,
+        formatDate(p.paymentDate),
+        `"${p.clientName.replace(/"/g, '""')}"`,
+        p.invoiceNumber,
+        p.method.toUpperCase(),
+        `"${(p.reference || "").replace(/"/g, '""')}"`,
+        (p.amountMinor / 100).toFixed(2),
+        p.recordedBy || "admin",
+        `"${(p.notes || "").replace(/"/g, '""')}"`,
+      ].join(",")
+    );
+
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rsl-payments-reconciliation-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${filteredPayments.length} payment receipt(s) for reconciliation`);
+  };
 
   const getMethodBadgeClass = (m: string) => {
     switch (m.toLowerCase()) {
@@ -191,7 +280,7 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
       case "neft":
       case "rtgs":
       case "bank_transfer":
-        return "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 border-blue-200 dark:border-blue-800";
+        return "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800";
       case "card":
         return "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-800";
       default:
@@ -230,32 +319,44 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
             </div>
             <div>
               <h1 className="text-xl font-bold tracking-tight text-zinc-900 dark:text-white">
-                Payment Collections
+                Payment Ledger &amp; Reconciliation Suite
               </h1>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Track collections, audit UTR/references, and record incoming remittances
+                Collection velocity telemetry, UTR/reference audit trail, and accounting reconciliation exports
               </p>
             </div>
           </div>
 
-          <button
-            onClick={() => setShowModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white text-xs font-semibold shadow-xs transition cursor-pointer self-start sm:self-auto"
-            data-testid="record-payment-btn"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Record Payment</span>
-          </button>
+          <div className="flex items-center gap-2.5 self-start sm:self-auto">
+            <button
+              onClick={handleExportReconciliationCsv}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-semibold border border-zinc-200 dark:border-zinc-800 shadow-xs transition cursor-pointer"
+              data-testid="export-payments-csv-btn"
+            >
+              <Download className="w-3.5 h-3.5 text-blue-500" />
+              <span className="font-tech">Export Reconciliation CSV</span>
+            </button>
+
+            <button
+              onClick={() => setShowModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white text-xs font-semibold shadow-xs transition cursor-pointer"
+              data-testid="record-payment-btn"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Record Payment</span>
+            </button>
+          </div>
         </div>
-        {/* Metric Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+        {/* Collection Velocity & Method Breakdown Strip */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
           <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs">
             <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-xs font-medium">
               <span>Total Collections</span>
               <DollarSign className="w-4 h-4 text-blue-500" />
             </div>
             <div
-              className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white"
+              className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white font-tech tabular-nums"
               data-testid="metric-total-collections"
             >
               {formatCurrency(totalCollectedMinor)}
@@ -267,11 +368,37 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
 
           <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs">
             <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-xs font-medium">
+              <span>This Month Velocity</span>
+              <Calendar className="w-4 h-4 text-emerald-500" />
+            </div>
+            <div className="mt-2 text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400 font-tech tabular-nums">
+              {formatCurrency(thisMonthCollectionsMinor)}
+            </div>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
+              Current calendar month inflow
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs">
+            <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-xs font-medium">
+              <span>Average Ticket Size</span>
+              <BarChart3 className="w-4 h-4 text-indigo-500" />
+            </div>
+            <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white font-tech tabular-nums">
+              {formatCurrency(avgPaymentMinor)}
+            </div>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
+              Mean settlement per receipt
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs">
+            <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-xs font-medium">
               <span>Recorded Transactions</span>
               <Receipt className="w-4 h-4 text-blue-500" />
             </div>
             <div
-              className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white"
+              className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white font-tech tabular-nums"
               data-testid="metric-total-tx"
             >
               {payments.length}
@@ -287,13 +414,13 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
               <TrendingUp className="w-4 h-4 text-blue-500" />
             </div>
             <div
-              className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white"
+              className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white font-tech tabular-nums"
               data-testid="metric-upi-count"
             >
               {upiCount} tx
             </div>
-            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
-              Direct VPA instant settlements
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 font-tech">
+              {formatCurrency(methodBreakdown.upiMinor)} via VPA
             </p>
           </div>
 
@@ -303,44 +430,77 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
               <Building2 className="w-4 h-4 text-blue-500" />
             </div>
             <div
-              className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white"
+              className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white font-tech tabular-nums"
               data-testid="metric-bank-count"
             >
               {bankCount} tx
             </div>
-            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
-              Corporate bank wire transfers
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 font-tech">
+              {formatCurrency(methodBreakdown.bankMinor)} via Wire
             </p>
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              Filter by Method:
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {["all", "upi", "neft", "rtgs", "card", "bank_transfer"].map((m) => (
-                <button
-                  key={m}
-                  onClick={() => setMethodFilter(m)}
-                  className={`px-2.5 py-1 text-xs rounded-md font-medium transition cursor-pointer capitalize ${
-                    methodFilter === m
-                      ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                      : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700"
-                  }`}
-                  data-testid={`filter-method-${m}`}
-                >
-                  {m === "all" ? "All Methods" : m.replace("_", " ").toUpperCase()}
-                </button>
-              ))}
+        {/* Search, Method Pills & Sort Bar */}
+        <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 space-y-3 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            {/* Search Input */}
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by UTR reference, invoice number, or client..."
+                className="w-full pl-9 pr-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                data-testid="payments-search-input"
+              />
+            </div>
+
+            {/* Sort Select */}
+            <div className="flex items-center gap-2">
+              <ArrowUpDown className="w-4 h-4 text-zinc-400" />
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                className="px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                data-testid="payments-sort-select"
+              >
+                <option value="date_desc">Sort: Newest Date First</option>
+                <option value="date_asc">Sort: Oldest Date First</option>
+                <option value="amount_desc">Sort: Amount (High → Low)</option>
+                <option value="amount_asc">Sort: Amount (Low → High)</option>
+              </select>
             </div>
           </div>
 
-          <div className="text-xs text-zinc-500 dark:text-zinc-400">
-            Showing <span className="font-semibold text-zinc-900 dark:text-white">{filteredPayments.length}</span>{" "}
-            of {payments.length} transactions
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                Filter by Method:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {["all", "upi", "neft", "rtgs", "card", "bank_transfer"].map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setMethodFilter(m)}
+                    className={`px-2.5 py-1 text-xs rounded-md font-medium transition cursor-pointer capitalize ${
+                      methodFilter === m
+                        ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                        : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                    }`}
+                    data-testid={`filter-method-${m}`}
+                  >
+                    {m === "all" ? "All Methods" : m.replace("_", " ").toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="text-xs text-zinc-500 dark:text-zinc-400">
+              Showing <span className="font-semibold text-zinc-900 dark:text-white">{filteredPayments.length}</span>{" "}
+              of {payments.length} transactions
+            </div>
           </div>
         </div>
 
@@ -355,7 +515,7 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
                 No payment transactions found
               </p>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto">
-                No remittances have been recorded yet. Click &quot;Record Payment&quot; to apply a transaction against an active invoice.
+                No remittances match your current filter. Click &quot;Record Payment&quot; to apply a transaction against an active invoice.
               </p>
             </div>
           ) : (
@@ -371,13 +531,15 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
                     <th className="px-4 py-3">Reference / UTR</th>
                     <th className="px-4 py-3 text-right">Amount</th>
                     <th className="px-4 py-3">Recorded By</th>
+                    <th className="px-4 py-3 text-right">Inspect</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                   {filteredPayments.map((p) => (
                     <tr
                       key={p.id}
-                      className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition-colors"
+                      onClick={() => setSelectedReceipt(p)}
+                      className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition-colors cursor-pointer"
                       data-testid={`payment-row-${p.id}`}
                     >
                       <td className="px-4 py-3.5 font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
@@ -389,7 +551,7 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
                       <td className="px-4 py-3.5 font-medium text-zinc-900 dark:text-white">
                         {p.clientName}
                       </td>
-                      <td className="px-4 py-3.5">
+                      <td className="px-4 py-3.5" onClick={(e) => e.stopPropagation()}>
                         <Link
                           href="/admin/invoices"
                           className="font-mono text-[11px] text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
@@ -410,11 +572,21 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
                       <td className="px-4 py-3.5 font-mono text-[11px] text-zinc-600 dark:text-zinc-300">
                         {p.reference || <span className="text-zinc-400 italic">None</span>}
                       </td>
-                      <td className="px-4 py-3.5 text-right font-semibold text-zinc-900 dark:text-white">
+                      <td className="px-4 py-3.5 text-right font-semibold font-tech text-zinc-900 dark:text-white tabular-nums">
                         {formatCurrency(p.amountMinor)}
                       </td>
                       <td className="px-4 py-3.5 text-zinc-500 dark:text-zinc-400 capitalize">
                         {p.recordedBy || "admin"}
+                      </td>
+                      <td className="px-4 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => setSelectedReceipt(p)}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 text-[11px] font-medium transition cursor-pointer"
+                          data-testid={`inspect-payment-${p.id}`}
+                        >
+                          <Eye className="w-3 h-3 text-blue-500" />
+                          <span>Receipt</span>
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -424,6 +596,98 @@ export function PaymentManager({ initialPayments, invoices: initialInvoiceOption
           )}
         </div>
       </main>
+
+      {/* Payment Receipt Inspector Modal */}
+      {selectedReceipt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-2xl space-y-5">
+            <div className="flex items-start justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800">
+              <div>
+                <span className="text-[10px] font-tech uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-bold">
+                  Verified Remittance Receipt
+                </span>
+                <h3 className="text-base font-bold text-zinc-900 dark:text-white mt-0.5 font-mono">
+                  {selectedReceipt.id}
+                </h3>
+              </div>
+              <button
+                onClick={() => setSelectedReceipt(null)}
+                className="p-1 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/70 dark:border-emerald-900/50 text-center">
+              <span className="text-xs text-zinc-500 block">Amount Settled</span>
+              <span className="text-2xl font-bold font-tech text-emerald-600 dark:text-emerald-400 mt-0.5 block">
+                {formatCurrency(selectedReceipt.amountMinor)}
+              </span>
+              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-300 mt-1 font-medium">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Reconciled against {selectedReceipt.invoiceNumber}
+              </span>
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              <div className="flex justify-between py-1.5 border-b border-zinc-100 dark:border-zinc-800">
+                <span className="text-zinc-500">Client Organization:</span>
+                <span className="font-semibold text-zinc-900 dark:text-white">{selectedReceipt.clientName}</span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-zinc-100 dark:border-zinc-800">
+                <span className="text-zinc-500">Applied Invoice:</span>
+                <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">
+                  {selectedReceipt.invoiceNumber}
+                </span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-zinc-100 dark:border-zinc-800">
+                <span className="text-zinc-500">Payment Channel:</span>
+                <span className="uppercase font-semibold">{selectedReceipt.method}</span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-zinc-100 dark:border-zinc-800">
+                <span className="text-zinc-500">UTR / Bank Reference:</span>
+                <span className="font-mono font-semibold text-zinc-800 dark:text-zinc-200">
+                  {selectedReceipt.reference || "N/A"}
+                </span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-zinc-100 dark:border-zinc-800">
+                <span className="text-zinc-500">Settlement Date:</span>
+                <span className="font-tech">{formatDate(selectedReceipt.paymentDate)}</span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-zinc-100 dark:border-zinc-800">
+                <span className="text-zinc-500">Audit Recorded By:</span>
+                <span className="capitalize">{selectedReceipt.recordedBy || "admin"}</span>
+              </div>
+              {selectedReceipt.notes && (
+                <div className="pt-1">
+                  <span className="text-zinc-500 block mb-1">Reconciliation Memo:</span>
+                  <p className="p-2.5 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300">
+                    {selectedReceipt.notes}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-zinc-200 dark:border-zinc-800">
+              <button
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs font-semibold text-zinc-700 dark:text-zinc-300 transition cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Print Voucher</span>
+              </button>
+              <a
+                href={`/api/v1/billing/invoices/${selectedReceipt.invoiceId}/pdf`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Invoice PDF</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Record Payment Modal */}
       {showModal && (
