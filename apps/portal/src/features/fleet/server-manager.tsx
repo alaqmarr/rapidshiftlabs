@@ -33,9 +33,19 @@ import {
   RotateCw,
   Filter,
   ChevronRight,
+  Pencil,
 } from "lucide-react";
 import { useAlert } from "@/components/ui/alert-popup";
 import { IosSpinner } from "@/components/ui/ios-spinner";
+
+const SERVER_NAME_PRESETS = [
+  "RSL Control Plane Host",
+  "Production Oracle VM 01",
+  "Client Apps Cluster 01",
+  "Staging & Beta Host",
+  "Background Worker Node",
+  "Primary Application Server",
+];
 
 export interface SerializedProcess {
   id: string;
@@ -249,6 +259,22 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
   const [formFingerprint, setFormFingerprint] = useState("");
   const [formError, setFormError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Edit Server Form State & Inline Rename State
+  const [editingServer, setEditingServer] = useState<SerializedServer | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editHost, setEditHost] = useState("");
+  const [editPort, setEditPort] = useState("22");
+  const [editUsername, setEditUsername] = useState("ubuntu");
+  const [editFingerprint, setEditFingerprint] = useState("");
+  const [editPrivateKey, setEditPrivateKey] = useState("");
+  const [editPassphrase, setEditPassphrase] = useState("");
+  const [editError, setEditError] = useState("");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  const [inlineRenameServerId, setInlineRenameServerId] = useState<string | null>(null);
+  const [inlineRenameValue, setInlineRenameValue] = useState<string>("");
+  const [isInlineSaving, setIsInlineSaving] = useState<boolean>(false);
 
   // Mapping Form State
   const [mapClientId, setMapClientId] = useState<string>("");
@@ -547,6 +573,139 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
     setFormPassphrase("");
     setFormFingerprint("");
     setFormError("");
+  }
+
+  function openEditServerModal(srv: SerializedServer) {
+    setEditingServer(srv);
+    setEditName(srv.name);
+    setEditHost(srv.host);
+    setEditPort(String(srv.port || 22));
+    setEditUsername(srv.username || "ubuntu");
+    setEditFingerprint(srv.hostFingerprint || "");
+    setEditPrivateKey("");
+    setEditPassphrase("");
+    setEditError("");
+  }
+
+  async function handleUpdateServer(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingServer) return;
+    setEditError("");
+    setIsSavingEdit(true);
+
+    try {
+      const payload: Record<string, any> = {
+        name: editName.trim(),
+        host: editHost.trim(),
+        port: Number(editPort) || 22,
+        username: editUsername.trim() || "ubuntu",
+        hostFingerprint: editFingerprint.trim() || null,
+      };
+      if (editPrivateKey.trim()) {
+        payload.privateKey = editPrivateKey.trim();
+        if (editPassphrase.trim()) {
+          payload.passphrase = editPassphrase.trim();
+        }
+      }
+
+      const res = await fetch(`/api/v1/admin/servers/${editingServer.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to update server details");
+      }
+
+      const updatedSrv = data.server;
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === editingServer.id
+            ? {
+                ...s,
+                name: updatedSrv?.name ?? editName.trim(),
+                host: updatedSrv?.host ?? editHost.trim(),
+                port: updatedSrv?.port ?? (Number(editPort) || 22),
+                username: updatedSrv?.username ?? (editUsername.trim() || "ubuntu"),
+                hostFingerprint:
+                  updatedSrv?.hostFingerprint !== undefined
+                    ? updatedSrv.hostFingerprint
+                    : editFingerprint.trim() || null,
+              }
+            : s
+        )
+      );
+
+      setServerStats((prev) => {
+        if (!prev[editingServer.id]) return prev;
+        return {
+          ...prev,
+          [editingServer.id]: {
+            ...prev[editingServer.id],
+            serverName: updatedSrv?.name ?? editName.trim(),
+            host: updatedSrv?.host ?? editHost.trim(),
+            port: updatedSrv?.port ?? (Number(editPort) || 22),
+            username: updatedSrv?.username ?? (editUsername.trim() || "ubuntu"),
+          },
+        };
+      });
+
+      setEditingServer(null);
+      showSuccess(
+        "Server Updated",
+        `Server '${updatedSrv?.name ?? editName.trim()}' configuration has been updated.`,
+        [
+          { label: "Server Name", value: updatedSrv?.name ?? editName.trim() },
+          {
+            label: "Endpoint",
+            value: `${updatedSrv?.username ?? editUsername.trim()}@${updatedSrv?.host ?? editHost.trim()}:${updatedSrv?.port ?? editPort}`,
+          },
+        ]
+      );
+    } catch (err: any) {
+      setEditError(err.message);
+      showError("Update Server Failed", err.message);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  }
+
+  async function handleInlineRename(serverId: string, newName: string) {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    setIsInlineSaving(true);
+    try {
+      const res = await fetch(`/api/v1/admin/servers/${serverId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to rename server");
+      }
+
+      setServers((prev) =>
+        prev.map((s) => (s.id === serverId ? { ...s, name: trimmed } : s))
+      );
+      setServerStats((prev) => {
+        if (!prev[serverId]) return prev;
+        return {
+          ...prev,
+          [serverId]: {
+            ...prev[serverId],
+            serverName: trimmed,
+          },
+        };
+      });
+      setInlineRenameServerId(null);
+      showSuccess("Server Renamed", `Server name updated to '${trimmed}'.`);
+    } catch (err: any) {
+      showError("Rename Failed", err.message);
+    } finally {
+      setIsInlineSaving(false);
+    }
   }
 
   async function handleDiscover(serverId: string, silent = false) {
@@ -1298,6 +1457,17 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
+                              openEditServerModal(s);
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-zinc-200/70 dark:hover:bg-zinc-800 text-zinc-400 hover:text-indigo-500 transition cursor-pointer"
+                            title="Edit Server Name & Options"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
                               void handleDiscover(s.id);
                             }}
                             disabled={discoveringId === s.id}
@@ -1340,9 +1510,75 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-zinc-200 dark:border-zinc-800">
                     <div className="space-y-1.5">
                       <div className="flex flex-wrap items-center gap-2.5">
-                        <h2 className="text-xl font-bold steel-heading text-zinc-900 dark:text-white">
-                          {selectedServer.name}
-                        </h2>
+                        {inlineRenameServerId === selectedServer.id ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="text"
+                              value={inlineRenameValue}
+                              onChange={(e) => setInlineRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  void handleInlineRename(selectedServer.id, inlineRenameValue);
+                                } else if (e.key === "Escape") {
+                                  setInlineRenameServerId(null);
+                                }
+                              }}
+                              autoFocus
+                              placeholder="Enter server name..."
+                              className="px-3 py-1 text-sm font-bold rounded-lg border border-blue-500 bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                            <select
+                              value=""
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  setInlineRenameValue(e.target.value);
+                                }
+                              }}
+                              className="px-2 py-1 text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 font-tech"
+                            >
+                              <option value="">Quick Name Options...</option>
+                              {SERVER_NAME_PRESETS.map((preset) => (
+                                <option key={preset} value={preset}>
+                                  {preset}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              disabled={isInlineSaving || !inlineRenameValue.trim()}
+                              onClick={() =>
+                                void handleInlineRename(selectedServer.id, inlineRenameValue)
+                              }
+                              className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition cursor-pointer disabled:opacity-50"
+                            >
+                              {isInlineSaving ? "Saving..." : "Save"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setInlineRenameServerId(null)}
+                              className="px-2 py-1 rounded-lg border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <h2 className="text-xl font-bold steel-heading text-zinc-900 dark:text-white">
+                              {selectedServer.name}
+                            </h2>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setInlineRenameServerId(selectedServer.id);
+                                setInlineRenameValue(selectedServer.name);
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-blue-500 transition cursor-pointer"
+                              title="Quick Edit Server Name"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                         {getStatusBadge(selectedServer.status)}
                         <span className="steel-pill inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 font-tech">
                           <Zap className="w-2.5 h-2.5" /> ZERO-LOAD PROCFS
@@ -1390,6 +1626,16 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                           ago
                         </span>
                       )}
+
+                      <button
+                        type="button"
+                        onClick={() => openEditServerModal(selectedServer)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-semibold rounded-xl border border-zinc-200 dark:border-zinc-700 transition font-tech cursor-pointer"
+                        title="Edit Server Name, Host & SSH Options"
+                      >
+                        <Pencil className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Edit Server</span>
+                      </button>
 
                       {serverProcessCounts.stopped > 0 && (
                         <button
@@ -2507,6 +2753,23 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                   onChange={(e) => setFormName(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+                <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                  <span className="text-[10px] text-zinc-400 font-tech">Quick options:</span>
+                  {SERVER_NAME_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setFormName(preset)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-tech border transition cursor-pointer ${
+                        formName === preset
+                          ? "bg-blue-600 text-white border-blue-500"
+                          : "bg-zinc-100 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:border-blue-500/50"
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-2">
@@ -2764,6 +3027,158 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition cursor-pointer"
                 >
                   {isSavingMap ? "Applying..." : `Apply to ${selectedProcessIds.length} Processes`}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL 6: EDIT SERVER NAME & CONNECTION OPTIONS
+         ===================================================================== */}
+      {editingServer && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl max-w-lg w-full p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-500">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base">Edit Server Name &amp; Options</h3>
+                  <p className="text-[11px] text-zinc-400 font-tech">
+                    ID: {editingServer.id} · {editingServer.host}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingServer(null)}
+                className="text-zinc-400 hover:text-zinc-600 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {editError && (
+              <div className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 text-xs text-rose-600 border border-rose-200 dark:border-rose-900">
+                {editError}
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateServer} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block font-semibold mb-1">Server Display Name *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. RSL Control Plane Host"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  <span className="text-[10px] text-zinc-400 font-tech">Name Presets:</span>
+                  {SERVER_NAME_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setEditName(preset)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-tech border transition cursor-pointer ${
+                        editName === preset
+                          ? "bg-blue-600 text-white border-blue-500"
+                          : "bg-zinc-100 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:border-blue-500/50"
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div className="col-span-2">
+                  <label className="block font-semibold mb-1">Host / IP *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editHost}
+                    onChange={(e) => setEditHost(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold mb-1">SSH Port</label>
+                  <input
+                    type="number"
+                    value={editPort}
+                    onChange={(e) => setEditPort(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-semibold mb-1">SSH Username</label>
+                  <input
+                    type="text"
+                    value={editUsername}
+                    onChange={(e) => setEditUsername(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold mb-1">Host Fingerprint (optional)</label>
+                  <input
+                    type="text"
+                    placeholder="SHA256:..."
+                    value={editFingerprint}
+                    onChange={(e) => setEditFingerprint(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-1 border-t border-zinc-200 dark:border-zinc-800/80 space-y-2">
+                <label className="block font-semibold">
+                  Rotate SSH Private Key (optional — leave blank to keep existing encrypted key)
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Leave blank to retain current AES-256-GCM encrypted key, or paste new OpenSSH key..."
+                  value={editPrivateKey}
+                  onChange={(e) => setEditPrivateKey(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {editPrivateKey.trim() && (
+                  <div>
+                    <label className="block font-semibold mb-1">New Key Passphrase (optional)</label>
+                    <input
+                      type="password"
+                      value={editPassphrase}
+                      onChange={(e) => setEditPassphrase(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-3 border-t border-zinc-200 dark:border-zinc-800 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingServer(null)}
+                  className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingEdit ? "Saving Changes..." : "Save Server Changes"}
                 </button>
               </div>
             </form>
