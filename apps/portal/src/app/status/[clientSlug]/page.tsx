@@ -126,6 +126,118 @@ export default async function StatusPage({ params }: StatusPageProps) {
     };
   } else {
     data = await container.monitoring.getPublicStatusPage({ clientSlug });
+
+    // Resilient fallback if clientSlug is a client ID (e.g. cli_01M4KF1YVKPEAR7WN8NV4R1E67) or mixed-case slug
+    if (!data) {
+      const trimmed = clientSlug.trim();
+      const lower = trimmed.toLowerCase();
+      let matchedClient =
+        (await container.clientDirectoryRepo.findById(trimmed).catch(() => null)) ||
+        (await (container.clientDirectoryRepo as any).findBySlug?.(lower).catch(() => null));
+
+      if (!matchedClient) {
+        const allClients = await container.clientDirectoryRepo
+          .list({ limit: 200 })
+          .catch(() => ({ items: [] as any[] }));
+        matchedClient =
+          allClients.items.find(
+            (c: any) =>
+              (c.id && c.id.toLowerCase() === lower) ||
+              (c.slug && c.slug.toLowerCase() === lower),
+          ) || null;
+      }
+
+      if (matchedClient) {
+        data = await container.monitoring
+          .getPublicStatusPage({ clientSlug: matchedClient.slug })
+          .catch(() => null);
+
+        if (!data) {
+          // Direct assembly fallback when client exists
+          const clientDomains = await container.monitoredDomainRepo
+            .findByClientId(matchedClient.id)
+            .catch(() => []);
+          const rawActiveIncidents = await container.incidentRepo
+            .findActiveByClientId(matchedClient.id)
+            .catch(() => []);
+          const rawRecentIncidents = await container.incidentRepo
+            .findRecentByClientId(matchedClient.id, 10)
+            .catch(() => []);
+
+          const now = Date.now();
+          const ms24h = 24 * 3600 * 1000;
+          const domainMap = new Map(clientDomains.map((d: any) => [d.id, d]));
+
+          const domainItems: PublicStatusPageDomain[] = await Promise.all(
+            clientDomains.map(async (domain: any) => {
+              const [u24, u7, u30, u90, dailyBars] = await Promise.all([
+                container.domainCheckRepo.getUptimePercentage(domain.id, now - ms24h).catch(() => 100),
+                container.domainCheckRepo.getUptimePercentage(domain.id, now - 7 * ms24h).catch(() => 100),
+                container.domainCheckRepo.getUptimePercentage(domain.id, now - 30 * ms24h).catch(() => 100),
+                container.domainCheckRepo.getUptimePercentage(domain.id, now - 90 * ms24h).catch(() => 100),
+                container.domainCheckRepo.getDailyBars(domain.id, 90).catch(() => []),
+              ]);
+
+              return {
+                id: domain.id,
+                name: domain.name,
+                hostname: domain.hostname,
+                status: domain.status,
+                uptime24h: u24,
+                uptime7d: u7,
+                uptime30d: u30,
+                uptime90d: u90,
+                dailyHealthBars: dailyBars.map((b: any) => ({
+                  date: b.date,
+                  status: b.status,
+                })),
+                sslDaysRemaining: domain.sslDaysRemaining,
+              };
+            }),
+          );
+
+          const activeIncidents = rawActiveIncidents.map((inc: any) => ({
+            id: inc.id,
+            domainId: inc.domainId,
+            domainName: (domainMap.get(inc.domainId) as any)?.name || "Monitored Endpoint",
+            type: inc.type,
+            severity: inc.severity,
+            startedAt: inc.startedAt,
+            reason: inc.reason,
+          }));
+
+          const recentIncidents = rawRecentIncidents.map((inc: any) => ({
+            id: inc.id,
+            domainId: inc.domainId,
+            domainName: (domainMap.get(inc.domainId) as any)?.name || "Monitored Endpoint",
+            type: inc.type,
+            severity: inc.severity,
+            startedAt: inc.startedAt,
+            resolvedAt: inc.resolvedAt,
+            durationSeconds: inc.durationSeconds,
+            reason: inc.reason,
+          }));
+
+          const hasOutage =
+            domainItems.some((d) => d.status === "down") ||
+            activeIncidents.some((inc) => inc.severity === "critical" || inc.type === "http");
+          const hasDegraded =
+            domainItems.some((d) => d.status === "degraded") || activeIncidents.length > 0;
+
+          data = {
+            client: {
+              id: matchedClient.id,
+              name: matchedClient.name,
+              slug: matchedClient.slug || matchedClient.id,
+            },
+            overallStatus: hasOutage ? "outage" : hasDegraded ? "degraded" : "operational",
+            domains: domainItems,
+            activeIncidents,
+            recentIncidents,
+          };
+        }
+      }
+    }
   }
 
   if (!data) {

@@ -15,9 +15,10 @@ export default async function AdminDomainsPage() {
       container.clientDirectoryRepo.list({ limit: 100 }),
     ]);
 
-    clientOptions = clientsRes.items.map((c) => ({
+    clientOptions = clientsRes.items.map((c: any) => ({
       id: c.id,
       name: c.name,
+      slug: c.slug,
     }));
 
     initialDomains = domainsList.map((d) => {

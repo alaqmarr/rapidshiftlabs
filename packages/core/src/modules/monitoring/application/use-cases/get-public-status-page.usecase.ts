@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
 import type { MonitoredDomainRepositoryPort } from "../../domain/ports/monitored-domain-repo.port";
 import type { DomainCheckRepositoryPort } from "../../domain/ports/domain-check-repo.port";
 import type { IncidentRepositoryPort } from "../../domain/ports/incident-repo.port";
@@ -28,18 +28,21 @@ export class GetPublicStatusPageUseCase {
   async execute(
     input: GetPublicStatusPageInput,
   ): Promise<PublicStatusPageData | null> {
-    const slug = input.clientSlug.trim().toLowerCase();
+    const rawIdentifier = input.clientSlug.trim();
+    const slug = rawIdentifier.toLowerCase();
     if (!slug) return null;
 
-    // 1. Resolve client
+    // 1. Resolve client (by slug OR by client ID, case-insensitively)
     let clientInfo: { id: string; name: string; slug: string } | null = null;
 
     if (this.clientLookup) {
-      clientInfo = await this.clientLookup(slug);
+      clientInfo =
+        (await this.clientLookup(slug)) ??
+        (rawIdentifier !== slug ? await this.clientLookup(rawIdentifier) : null);
     } else {
       try {
         const db = getDb("core");
-        // Lookup from clients table first
+        // Lookup from clients table by slug OR id (exact or case-insensitive)
         const clientRows = await db
           .select({
             id: clients.id,
@@ -47,7 +50,14 @@ export class GetPublicStatusPageUseCase {
             slug: clients.slug,
           })
           .from(clients)
-          .where(eq(clients.slug, slug))
+          .where(
+            or(
+              eq(clients.slug, slug),
+              eq(clients.id, rawIdentifier),
+              sql`lower(${clients.id}) = ${slug}`,
+              sql`lower(${clients.slug}) = ${slug}`,
+            ),
+          )
           .limit(1);
 
         if (clientRows.length > 0 && clientRows[0]) {
