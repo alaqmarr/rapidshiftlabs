@@ -43,7 +43,11 @@ export async function GET(
 
     const onlineProcesses = processes.filter((p: any) => p.status === "online").length;
     const erroredProcesses = processes.filter((p: any) => p.status === "errored" || p.status === "stopped").length;
-    const hasCrashLoop = processes.some((p: any) => p.restarts >= 5);
+    const hasCrashLoop = processes.some(
+      (p: any) =>
+        (p.status === "errored" && (p.restarts || 0) >= 3) ||
+        (p.status === "online" && p.uptimeMs > 0 && p.uptimeMs < 30_000 && (p.restarts || 0) >= 8)
+    );
 
     const activeIncidents = domains.filter((d: any) => d.status === "down").length;
     const expiringSsl = domains.filter((d: any) => d.sslStatus === "expiring").length;

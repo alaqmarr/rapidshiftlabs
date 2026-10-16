@@ -70,7 +70,11 @@ export default async function AdminClientDetailPage(props: {
       totalProcesses: processes.length,
       onlineProcesses: processes.filter((p: any) => p.status === "online").length,
       erroredProcesses: processes.filter((p: any) => p.status === "errored" || p.status === "stopped").length,
-      hasCrashLoop: processes.some((p: any) => p.restarts >= 5),
+      hasCrashLoop: processes.some(
+        (p: any) =>
+          (p.status === "errored" && (p.restarts || 0) >= 3) ||
+          (p.status === "online" && p.uptimeMs > 0 && p.uptimeMs < 30_000 && (p.restarts || 0) >= 8)
+      ),
     },
     monitoring: {
       totalDomains: domains.length,

@@ -83,4 +83,81 @@ at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1607:16)
     expect(report.category).toBe("CRASH_LOOP");
     expect(report.recoveryAction).toBe("CIRCUIT_BREAKER_SUSPENDED");
   });
+
+  it("treats high restart counts on a stable online process as normal project updates/deployments, not errors", () => {
+    const logsWithOldErrorAndCleanBoot = [
+      "2026-10-01T10:00:00: TypeError: old error from two weeks ago",
+      ...Array.from({ length: 25 }, (_, i) => `2026-10-16T08:00:${String(i).padStart(2, "0")}: [INFO] Server listening and handling requests normally`),
+    ].join("\n");
+
+    const report = FleetDiagnosticsService.diagnose(
+      {
+        id: "proc_frequent_deploys",
+        pm2Id: 0,
+        name: "rsl-portal",
+        status: "online",
+        restarts: 45,
+        uptimeMs: 3600000,
+      },
+      logsWithOldErrorAndCleanBoot
+    );
+
+    expect(report.severity).toBe("HEALTHY");
+    expect(report.category).toBe("NONE");
+    expect(report.isCrashLoop).toBe(false);
+    expect(report.recoveryAction).toBe("NO_ACTION_NEEDED");
+    expect(report.summary).toContain("normal update activity");
+  });
+
+  it("treats a freshly deployed online process with clean startup logs as healthy despite prior restarts", () => {
+    const cleanDeployLogs = `
+[PM2] Reloading process rsl-portal...
+▲ Next.js 16.4.0
+- Local: http://localhost:3000
+✓ Ready in 1240ms
+    `;
+
+    const report = FleetDiagnosticsService.diagnose(
+      {
+        id: "proc_fresh_deploy",
+        pm2Id: 0,
+        name: "rsl-portal",
+        status: "online",
+        restarts: 22,
+        uptimeMs: 15000,
+      },
+      cleanDeployLogs
+    );
+
+    expect(report.severity).toBe("HEALTHY");
+    expect(report.category).toBe("NONE");
+    expect(report.isCrashLoop).toBe(false);
+    expect(report.recoveryAction).toBe("NO_ACTION_NEEDED");
+  });
+
+  it("flags an online process that just restarted (<60s uptime) ONLY when recent logs show a real crash signature", () => {
+    const flappingLogs = `
+Starting worker...
+TypeError: Cannot read properties of undefined (reading 'connection')
+    at startServer (/app/index.js:42:11)
+    `;
+
+    const report = FleetDiagnosticsService.diagnose(
+      {
+        id: "proc_flapping",
+        pm2Id: 4,
+        name: "flapping-api",
+        status: "online",
+        restarts: 10,
+        uptimeMs: 12000,
+      },
+      flappingLogs
+    );
+
+    expect(report.isCrashLoop).toBe(true);
+    expect(report.severity).toBe("CRITICAL");
+    expect(report.category).toBe("UNCAUGHT_EXCEPTION");
+    expect(report.recoveryAction).toBe("CIRCUIT_BREAKER_SUSPENDED");
+  });
 });
+

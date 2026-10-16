@@ -579,7 +579,18 @@ export function AdminDashboardView({
                               </div>
                             </td>
                             <td className="py-3.5 font-tech">
-                              <span className={proc.restarts > 5 ? "text-amber-500 font-bold" : "text-zinc-500"}>
+                              <span
+                                className={
+                                  isErrored && proc.restarts >= 3
+                                    ? "text-rose-500 font-bold"
+                                    : "text-zinc-500"
+                                }
+                                title={
+                                  isErrored
+                                    ? `${proc.restarts} restarts before process halted`
+                                    : `${proc.restarts} cumulative deployments / restarts (process is online)`
+                                }
+                              >
                                 {proc.restarts}
                               </span>
                             </td>

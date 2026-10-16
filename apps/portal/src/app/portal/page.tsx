@@ -100,7 +100,11 @@ export default async function ClientPortalOverviewPage() {
       totalProcesses: clientProcesses.length,
       onlineProcesses: onlineProcs,
       erroredProcesses: erroredProcs,
-      hasCrashLoop: clientProcesses.some((p: any) => p.restarts >= 5),
+      hasCrashLoop: clientProcesses.some(
+        (p: any) =>
+          (p.status === "errored" && (p.restarts || 0) >= 3) ||
+          (p.status === "online" && p.uptimeMs > 0 && p.uptimeMs < 30_000 && (p.restarts || 0) >= 8)
+      ),
     },
     monitoring: {
       totalDomains: clientDomains.length,

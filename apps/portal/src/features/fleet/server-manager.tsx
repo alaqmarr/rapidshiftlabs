@@ -169,6 +169,21 @@ function formatProcessUptime(uptimeMs: number, status: string): string {
   return `${mins}m`;
 }
 
+/**
+ * Distinguishes actual crashing / crash-looping processes from stable online processes
+ * that simply have a high cumulative restart count due to frequent project updates/deployments.
+ */
+function isProcessCrashing(proc: { status: string; restarts: number; uptimeMs: number }): boolean {
+  const status = String(proc.status || "").toLowerCase();
+  if (status === "errored") return true;
+  if (status !== "online" && status !== "stopped" && (proc.restarts || 0) >= 3) return true;
+  // Rapid flapping: online right now, but uptime is < 30 seconds after >= 8 restarts
+  if (status === "online" && proc.uptimeMs > 0 && proc.uptimeMs < 30_000 && (proc.restarts || 0) >= 8) {
+    return true;
+  }
+  return false;
+}
+
 function MiniSparkline({
   values,
   colorClass = "stroke-blue-500",
@@ -418,7 +433,7 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
       all: list.length,
       online: list.filter((p) => p.status === "online").length,
       stopped: list.filter((p) => p.status !== "online").length,
-      unstable: list.filter((p) => p.restarts >= 20 || p.status === "errored").length,
+      unstable: list.filter((p) => isProcessCrashing(p)).length,
       mapped: list.filter((p) => Boolean(p.clientId)).length,
       unassigned: list.filter((p) => !p.clientId).length,
     };
@@ -434,7 +449,7 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
     } else if (processFilter === "stopped") {
       list = list.filter((p) => p.status !== "online");
     } else if (processFilter === "unstable") {
-      list = list.filter((p) => p.restarts >= 20 || p.status === "errored");
+      list = list.filter((p) => isProcessCrashing(p));
     } else if (processFilter === "mapped") {
       list = list.filter((p) => Boolean(p.clientId));
     } else if (processFilter === "unassigned") {
@@ -1970,7 +1985,7 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                             },
                             {
                               id: "unstable",
-                              label: "High Restarts",
+                              label: "Crashing / Flapping",
                               count: serverProcessCounts.unstable,
                             },
                             { id: "mapped", label: "Mapped", count: serverProcessCounts.mapped },
@@ -2162,7 +2177,7 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                               className="steel-metric-label px-4 py-3 cursor-pointer hover:text-zinc-200"
                             >
                               <span className="inline-flex items-center gap-1">
-                                Uptime &amp; Restarts <ArrowUpDown className="w-3 h-3 opacity-60" />
+                                Uptime &amp; Deploys <ArrowUpDown className="w-3 h-3 opacity-60" />
                               </span>
                             </th>
                             <th className="steel-metric-label px-4 py-3">Tenant Assignment</th>
@@ -2177,7 +2192,7 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                             const isOnline = proc.status === "online";
                             const isRestarting = Boolean(restartingProcIds[proc.id]);
                             const isChecked = selectedProcessIds.includes(proc.id);
-                            const highRestarts = proc.restarts >= 20;
+                            const isCrashing = isProcessCrashing(proc);
 
                             return (
                               <tr
@@ -2211,12 +2226,12 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                                     <span className="font-steel font-bold text-zinc-900 dark:text-zinc-100 text-sm">
                                       {proc.name}
                                     </span>
-                                    {highRestarts && (
+                                    {isCrashing && (
                                       <span
-                                        className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-tech"
-                                        title={`High restart count (${proc.restarts}) — click Diagnose to inspect logs`}
+                                        className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30 text-[10px] font-tech"
+                                        title={`Process is crashing or flapping (${proc.restarts} restarts) — click Diagnose to inspect logs`}
                                       >
-                                        ⚡ {proc.restarts}x
+                                        ⚠️ {proc.status === "errored" ? "Crashed" : `Flapping (${proc.restarts}x)`}
                                       </span>
                                     )}
                                   </div>
@@ -2288,12 +2303,19 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                                   </div>
                                   <div
                                     className={`text-[11px] ${
-                                      highRestarts
-                                        ? "text-amber-400 font-semibold"
+                                      isCrashing
+                                        ? "text-rose-400 font-semibold"
                                         : "text-zinc-400"
                                     }`}
+                                    title={
+                                      isCrashing
+                                        ? "Process is errored or flapping rapidly"
+                                        : "Cumulative PM2 restarts (includes code updates & deployments) — process is stable"
+                                    }
                                   >
-                                    {proc.restarts} restarts
+                                    {isCrashing
+                                      ? `${proc.restarts} crash restarts`
+                                      : `${proc.restarts} deploys / restarts`}
                                   </div>
                                 </td>
 
