@@ -21,6 +21,7 @@ import {
   Sparkles,
   Building2,
   Percent,
+  RefreshCw,
 } from "lucide-react";
 import { useAlert } from "@/components/ui/alert-popup";
 import {
@@ -71,6 +72,7 @@ export function ContractManager({ initialContracts, clients }: ContractManagerPr
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [generatingInvoiceId, setGeneratingInvoiceId] = useState<string | null>(null);
+  const [rollingForwardId, setRollingForwardId] = useState<string | null>(null);
   const [now] = useState(() => Date.now());
 
   // Filter & Sort State
@@ -420,6 +422,76 @@ export function ContractManager({ initialContracts, clients }: ContractManagerPr
       showError("Invoice Generation Failed", msg);
     } finally {
       setGeneratingInvoiceId(null);
+    }
+  };
+
+  const handleRollForwardRenewal = async (contract: ContractItem) => {
+    try {
+      setRollingForwardId(contract.id);
+      const res = await fetch(`/api/v1/admin/contracts/${contract.id}/autopilot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "roll_forward_renewal" }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        message?: string;
+        contract?: { validFrom?: number; validTo?: number; status?: ContractItem["status"] };
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error || "Failed to roll forward contract renewal");
+
+      const updatedValidFrom = data.contract?.validFrom ?? contract.validTo;
+      const tenureDurationMs = Math.max(86_400_000, (contract.validTo || 0) - (contract.validFrom || 0));
+      const updatedValidTo = data.contract?.validTo ?? updatedValidFrom + tenureDurationMs;
+
+      setContracts((prev) =>
+        prev.map((c) =>
+          c.id === contract.id
+            ? {
+                ...c,
+                validFrom: updatedValidFrom,
+                validTo: updatedValidTo,
+                status: "active",
+              }
+            : c,
+        ),
+      );
+      setSelectedContract((prev) =>
+        prev && prev.id === contract.id
+          ? {
+              ...prev,
+              validFrom: updatedValidFrom,
+              validTo: updatedValidTo,
+              status: "active",
+            }
+          : prev,
+      );
+
+      const newTenure = calculateContractTenure({
+        ...contract,
+        validFrom: updatedValidFrom,
+        validTo: updatedValidTo,
+        status: "active",
+      });
+
+      showSuccess(
+        "Contract Tenure Rolled Forward",
+        data.message || `Contract ${contract.code} (${contract.title}) has been renewed for ${newTenure.tenureLabel}.`,
+        [
+          { label: "Contract Code", value: contract.code },
+          { label: "Client", value: contract.clientName },
+          { label: "New Date Range", value: newTenure.dateRangeLabel },
+          { label: "Calculated Tenure", value: newTenure.tenureLabel },
+          { label: "Status", value: "ACTIVE" },
+        ],
+      );
+      showToast(`Rolled forward tenure for ${contract.code}`, "success");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to roll forward contract tenure";
+      showError("Roll-Forward Failed", msg);
+    } finally {
+      setRollingForwardId(null);
     }
   };
 
@@ -855,6 +927,18 @@ export function ContractManager({ initialContracts, clients }: ContractManagerPr
                         </td>
                         <td className="py-4 px-6 text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-2">
+                            {!tenure.isOneTime && (isExpiringSoon || isOverdueRenewal) && (
+                              <button
+                                onClick={() => handleRollForwardRenewal(contract)}
+                                disabled={rollingForwardId === contract.id}
+                                className="inline-flex items-center gap-1 bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-amber-500/30 transition font-tech cursor-pointer disabled:opacity-50"
+                                title="Roll forward tenure by full contract duration"
+                                data-testid={`roll-forward-contract-${contract.id}`}
+                              >
+                                <RefreshCw className={`w-3.5 h-3.5 ${rollingForwardId === contract.id ? "animate-spin" : ""}`} />
+                                <span>{rollingForwardId === contract.id ? "Rolling..." : "Roll-Forward Tenure"}</span>
+                              </button>
+                            )}
                             <button
                               onClick={() => openEditContractModal(contract)}
                               className="inline-flex items-center gap-1 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-zinc-200 dark:border-zinc-700 transition font-tech cursor-pointer"
@@ -937,6 +1021,17 @@ export function ContractManager({ initialContracts, clients }: ContractManagerPr
                   <p className="text-xs text-zinc-500">Client Tenant: {selectedContract.clientName}</p>
                 </div>
                 <div className="flex items-center gap-1.5">
+                  {!getTenureMetrics(selectedContract).isOneTime && (
+                    <button
+                      onClick={() => handleRollForwardRenewal(selectedContract)}
+                      disabled={rollingForwardId === selectedContract.id}
+                      className="px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/15 hover:bg-amber-500/25 text-xs font-semibold font-tech text-amber-700 dark:text-amber-300 inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      data-testid="drawer-roll-forward-btn"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${rollingForwardId === selectedContract.id ? "animate-spin" : ""}`} />
+                      <span>{rollingForwardId === selectedContract.id ? "Rolling..." : "Roll-Forward Tenure"}</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => openEditContractModal(selectedContract)}
                     className="px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 hover:bg-zinc-100 text-xs font-semibold text-zinc-700 dark:text-zinc-300 cursor-pointer"

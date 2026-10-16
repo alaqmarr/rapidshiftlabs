@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Users,
   Receipt,
@@ -26,10 +27,19 @@ import {
   Zap,
   ArrowUpRight,
   Eye,
+  Calendar,
+  FileText,
+  Sparkles,
+  Layers,
 } from "lucide-react";
 import { formatCurrency, formatDate, formatDateTime } from "@/lib/format";
 import { useAlert } from "@/components/ui/alert-popup";
 import { IosSpinner } from "@/components/ui/ios-spinner";
+import type {
+  SmartActionItem,
+  CashflowForecastMetrics,
+  CorrelatedIncidentItem,
+} from "@/lib/smart-intelligence";
 
 export interface AtRiskClientItem {
   id: string;
@@ -130,6 +140,9 @@ export interface AdminDashboardViewProps {
   monitoredDomains: AdminMonitoredDomainItem[];
   urgentTickets: AdminUrgentTicketItem[];
   recentAuditLogs: AdminAuditRecordItem[];
+  smartActions?: SmartActionItem[];
+  cashflowForecast?: CashflowForecastMetrics;
+  correlatedIncidents?: CorrelatedIncidentItem[];
 }
 
 export function AdminDashboardView({
@@ -141,11 +154,70 @@ export function AdminDashboardView({
   monitoredDomains,
   urgentTickets,
   recentAuditLogs,
+  smartActions = [],
+  cashflowForecast,
+  correlatedIncidents = [],
 }: AdminDashboardViewProps) {
+  const router = useRouter();
   const { showSuccess, showError, showAlert } = useAlert();
   const [diagnosingProcessId, setDiagnosingProcessId] = useState<string | null>(null);
+  const [executingActionId, setExecutingActionId] = useState<string | null>(null);
+  const [completedActionIds, setCompletedActionIds] = useState<Record<string, boolean>>({});
+  const [rollingContractId, setRollingContractId] = useState<string | null>(null);
   const [processes, setProcesses] = useState<AdminFleetProcessItem[]>(fleetProcesses);
   const [activeTab, setActiveTab] = useState<"radar" | "fleet" | "billing" | "domains" | "support">("radar");
+
+  const handleExecuteSmartAction = async (action: SmartActionItem) => {
+    if (!action.apiAction) return;
+    setExecutingActionId(action.id);
+    try {
+      const res = await fetch(action.apiAction.endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action.apiAction.payload || {}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError("Autopilot Execution Failed", data.error || "Unable to complete automated action.");
+        return;
+      }
+      setCompletedActionIds((prev) => ({ ...prev, [action.id]: true }));
+      showSuccess(
+        "Smart Autopilot Executed",
+        data.message || data.diagnosis?.summary || `Completed action: ${action.actionLabel}`,
+      );
+      router.refresh();
+    } catch (err: any) {
+      showError("Execution Error", err.message || "Failed to execute smart action.");
+    } finally {
+      setExecutingActionId(null);
+    }
+  };
+
+  const handleRollForwardContract = async (contractId: string, contractCode: string) => {
+    setRollingContractId(contractId);
+    try {
+      const res = await fetch(`/api/v1/admin/contracts/${contractId}/autopilot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "roll_forward_renewal" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError("Roll-Forward Failed", data.error || "Unable to roll forward contract tenure.");
+        return;
+      }
+      showSuccess(
+        "Contract Tenure Rolled Forward",
+        data.message || `Contract ${contractCode} has been rolled forward by its full tenure period.`,
+      );
+      router.refresh();
+    } catch (err: any) {
+      showError("Roll-Forward Error", err.message || "Failed to roll forward contract renewal.");
+    } finally {
+      setRollingContractId(null);
+    }
+  };
 
   const handleDiagnose = async (process: AdminFleetProcessItem, autoHeal: boolean) => {
     setDiagnosingProcessId(process.id);
@@ -375,6 +447,85 @@ export function AdminDashboardView({
           </div>
         </section>
 
+        {/* Correlated Root-Cause Incident Intelligence Banner */}
+        {correlatedIncidents.length > 0 && (
+          <section className="rounded-2xl border border-rose-500/30 bg-gradient-to-r from-rose-950/90 via-zinc-900 to-slate-900 text-white p-6 shadow-md space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400">
+                  <Layers className="w-4 h-4 animate-pulse" />
+                </div>
+                <div>
+                  <h2 className="steel-heading text-base text-white flex items-center gap-2">
+                    <span>Correlated Root-Cause Incident Intelligence</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-tech font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                      {correlatedIncidents.length} Multi-Signal Correlation(s)
+                    </span>
+                  </h2>
+                  <p className="text-xs text-zinc-300">
+                    Unified cross-module causal correlation across PM2 Fleet, Domain Watchdog, Releases, and Support SLAs.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {correlatedIncidents.map((inc) => (
+                <div
+                  key={inc.id}
+                  className="rounded-xl bg-zinc-900/90 border border-zinc-800 p-4 flex flex-col justify-between space-y-3"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-tech font-bold text-sm text-white flex items-center gap-2">
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            inc.severity === "critical" ? "bg-rose-500 animate-ping" : "bg-amber-400"
+                          }`}
+                        />
+                        {inc.title}
+                      </span>
+                      <Link
+                        href={inc.actionHref}
+                        className="text-xs font-tech font-semibold text-blue-400 hover:text-blue-300 inline-flex items-center gap-1"
+                      >
+                        <span>Inspect Client 360</span>
+                        <ArrowUpRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </div>
+                    <p className="text-xs text-zinc-200 leading-relaxed font-medium">
+                      {inc.rootCauseSummary}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {inc.signals.map((sig, idx) => (
+                        <span
+                          key={`${inc.id}_sig_${idx}`}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-tech border ${
+                            sig.source === "fleet"
+                              ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
+                              : sig.source === "domain"
+                              ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+                              : sig.source === "release"
+                              ? "bg-indigo-500/15 text-indigo-300 border-indigo-500/30"
+                              : "bg-blue-500/15 text-blue-300 border-blue-500/30"
+                          }`}
+                        >
+                          <strong className="uppercase">{sig.source}:</strong> {sig.label} ({sig.detail})
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between gap-2 text-[11px] text-zinc-400">
+                    <span>
+                      <strong className="text-zinc-200">Recommended Action:</strong> {inc.recommendation}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Operational Filter Tabs */}
         <div className="flex items-center gap-2 border-b border-zinc-200/80 dark:border-zinc-800 pb-3 overflow-x-auto">
           {[
@@ -408,96 +559,203 @@ export function AdminDashboardView({
 
         {/* Dynamic Operational Panel View */}
         <section className="space-y-6">
-          {/* TAB 1: Client Health Radar */}
+          {/* TAB 1: Client Health Radar (Overview) */}
           {activeTab === "radar" && (
-            <div className="bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 rounded-2xl p-6 shadow-xs space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h2 className="steel-heading text-lg text-zinc-900 dark:text-white flex items-center gap-2">
-                    <Users className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                    Customer 360 &amp; Health Radar
-                  </h2>
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                    Multi-factor algorithmic health tracking across Billing (35%), Fleet (25%), Domains (20%), and Support SLA (20%).
-                  </p>
+            <>
+              {/* Smart Autopilot & Next Best Action Queue */}
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 rounded-2xl p-6 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h2 className="steel-heading text-lg text-zinc-900 dark:text-white flex items-center gap-2">
+                      <Zap className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                      Smart Autopilot &amp; Next Best Action Queue
+                    </h2>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      Prioritized autonomous actions across Fleet crash loops, Domain SSL/HTTP probes, Contract tenure renewals, Overdue Billing, and P1 Support.
+                    </p>
+                  </div>
+                  <span className="px-3 py-1 rounded-full text-xs font-tech font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 w-fit">
+                    {smartActions.length} Prioritized Action(s)
+                  </span>
                 </div>
-                <Link
-                  href="/admin/clients"
-                  className="px-3.5 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-800 text-xs font-tech font-semibold text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/60 transition flex items-center gap-1.5 w-fit"
-                >
-                  <span>Open Client Directory</span>
-                  <ExternalLink className="w-3 h-3" />
-                </Link>
-              </div>
 
-              {atRiskClients.length === 0 ? (
-                <div className="text-center py-12 text-zinc-500 dark:text-zinc-400 text-xs">
-                  <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2 opacity-80" />
-                  No clients currently at risk. All organizations are operating in excellent standing.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-zinc-100 dark:border-zinc-800 text-zinc-400 font-tech uppercase tracking-wider">
-                        <th className="pb-3 font-semibold">Client Organization</th>
-                        <th className="pb-3 font-semibold">Health Score</th>
-                        <th className="pb-3 font-semibold">Factor Breakdown</th>
-                        <th className="pb-3 font-semibold">Primary Risk / Attention</th>
-                        <th className="pb-3 font-semibold text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
-                      {atRiskClients.map((client) => (
-                        <tr key={client.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition">
-                          <td className="py-3.5 font-medium text-zinc-900 dark:text-white">
-                            <Link href={`/admin/clients/${client.id}`} className="hover:text-blue-600 hover:underline flex items-center gap-1.5">
-                              {client.name}
-                              <ArrowUpRight className="w-3 h-3 text-zinc-400" />
-                            </Link>
-                            <span className="text-[10px] text-zinc-400 font-tech">{client.id}</span>
-                          </td>
-                          <td className="py-3.5">
-                            {getHealthBadge(client.healthCategory, client.healthScore)}
-                          </td>
-                          <td className="py-3.5">
-                            <div className="flex items-center gap-3 text-[10px] font-tech text-zinc-400 min-w-[220px]">
-                              <span title={`Billing: ${client.factors.billing}/100`}>
-                                Bill: <strong className="text-zinc-700 dark:text-zinc-200">{client.factors.billing}%</strong>
-                              </span>
-                              <span title={`Fleet: ${client.factors.fleet}/100`}>
-                                Fleet: <strong className="text-zinc-700 dark:text-zinc-200">{client.factors.fleet}%</strong>
-                              </span>
-                              <span title={`Domains: ${client.factors.domains}/100`}>
-                                Dom: <strong className="text-zinc-700 dark:text-zinc-200">{client.factors.domains}%</strong>
-                              </span>
-                              <span title={`Support: ${client.factors.support}/100`}>
-                                SLA: <strong className="text-zinc-700 dark:text-zinc-200">{client.factors.support}%</strong>
+                {smartActions.length === 0 ? (
+                  <div className="text-center py-8 text-zinc-500 dark:text-zinc-400 text-xs">
+                    <CheckCircle2 className="w-7 h-7 text-emerald-500 mx-auto mb-2 opacity-80" />
+                    Zero pending autopilot actions. Fleet, domains, contracts, and billing are all operating nominally.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    {smartActions.map((act) => {
+                      const isDone = Boolean(completedActionIds[act.id]);
+                      const isRunning = executingActionId === act.id;
+                      const priorityBadgeClass =
+                        act.priority === "critical"
+                          ? "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/25"
+                          : act.priority === "high"
+                          ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/25"
+                          : "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/25";
+
+                      return (
+                        <div
+                          key={act.id}
+                          className="p-4 rounded-xl bg-zinc-50/70 dark:bg-zinc-800/40 border border-zinc-200/80 dark:border-zinc-800 flex flex-col justify-between gap-3 hover:border-blue-500/40 transition"
+                        >
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-tech font-bold uppercase border ${priorityBadgeClass}`}
+                                >
+                                  {act.priority}
+                                </span>
+                                <span className="px-2 py-0.5 rounded text-[10px] font-tech uppercase bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
+                                  {act.category}
+                                </span>
+                              </div>
+                              <span className="text-[11px] font-tech font-bold text-zinc-700 dark:text-zinc-300">
+                                {act.metricBadge}
                               </span>
                             </div>
-                          </td>
-                          <td className="py-3.5">
-                            <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 font-medium">
-                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                              {client.primaryRisk}
+                            <h3 className="text-xs font-bold text-zinc-900 dark:text-white leading-snug">
+                              {act.title}
+                            </h3>
+                            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                              {act.description}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-200/60 dark:border-zinc-800">
+                            <span className="text-[10px] font-tech text-zinc-400 truncate">
+                              {act.clientName ? `Tenant: ${act.clientName}` : "Platform Scope"}
                             </span>
-                          </td>
-                          <td className="py-3.5 text-right">
-                            <Link
-                              href={`/admin/clients/${client.id}`}
-                              className="px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200/60 dark:border-blue-800/60 font-tech font-semibold hover:bg-blue-600 hover:text-white transition inline-flex items-center gap-1"
-                            >
-                              <span>360° Profile</span>
-                              <ArrowRight className="w-3 h-3" />
-                            </Link>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                            <div className="flex items-center gap-2">
+                              {act.apiAction && (
+                                <button
+                                  type="button"
+                                  disabled={isRunning || isDone}
+                                  onClick={() => handleExecuteSmartAction(act)}
+                                  className={`px-3 py-1.5 rounded-lg text-xs font-tech font-semibold transition inline-flex items-center gap-1.5 cursor-pointer ${
+                                    isDone
+                                      ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+                                      : "bg-blue-600 hover:bg-blue-500 text-white shadow-xs"
+                                  }`}
+                                >
+                                  {isRunning ? (
+                                    <IosSpinner size={12} />
+                                  ) : isDone ? (
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <Sparkles className="w-3.5 h-3.5" />
+                                  )}
+                                  <span>{isDone ? "Executed" : act.actionLabel}</span>
+                                </button>
+                              )}
+                              <Link
+                                href={act.actionHref}
+                                className="px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-xs font-tech font-semibold text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition inline-flex items-center gap-1"
+                              >
+                                <span>{act.apiAction ? "Inspect" : act.actionLabel}</span>
+                                <ArrowRight className="w-3 h-3" />
+                              </Link>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 rounded-2xl p-6 shadow-xs space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="steel-heading text-lg text-zinc-900 dark:text-white flex items-center gap-2">
+                      <Users className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                      Customer 360 &amp; Health Radar
+                    </h2>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                      Multi-factor algorithmic health tracking across Billing (35%), Fleet (25%), Domains (20%), and Support SLA (20%).
+                    </p>
+                  </div>
+                  <Link
+                    href="/admin/clients"
+                    className="px-3.5 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-800 text-xs font-tech font-semibold text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/60 transition flex items-center gap-1.5 w-fit"
+                  >
+                    <span>Open Client Directory</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </Link>
                 </div>
-              )}
-            </div>
+
+                {atRiskClients.length === 0 ? (
+                  <div className="text-center py-12 text-zinc-500 dark:text-zinc-400 text-xs">
+                    <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2 opacity-80" />
+                    No clients currently at risk. All organizations are operating in excellent standing.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-zinc-100 dark:border-zinc-800 text-zinc-400 font-tech uppercase tracking-wider">
+                          <th className="pb-3 font-semibold">Client Organization</th>
+                          <th className="pb-3 font-semibold">Health Score</th>
+                          <th className="pb-3 font-semibold">Factor Breakdown</th>
+                          <th className="pb-3 font-semibold">Primary Risk / Attention</th>
+                          <th className="pb-3 font-semibold text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+                        {atRiskClients.map((client) => (
+                          <tr key={client.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition">
+                            <td className="py-3.5 font-medium text-zinc-900 dark:text-white">
+                              <Link href={`/admin/clients/${client.id}`} className="hover:text-blue-600 hover:underline flex items-center gap-1.5">
+                                {client.name}
+                                <ArrowUpRight className="w-3 h-3 text-zinc-400" />
+                              </Link>
+                              <span className="text-[10px] text-zinc-400 font-tech">{client.id}</span>
+                            </td>
+                            <td className="py-3.5">
+                              {getHealthBadge(client.healthCategory, client.healthScore)}
+                            </td>
+                            <td className="py-3.5">
+                              <div className="flex items-center gap-3 text-[10px] font-tech text-zinc-400 min-w-[220px]">
+                                <span title={`Billing: ${client.factors.billing}/100`}>
+                                  Bill: <strong className="text-zinc-700 dark:text-zinc-200">{client.factors.billing}%</strong>
+                                </span>
+                                <span title={`Fleet: ${client.factors.fleet}/100`}>
+                                  Fleet: <strong className="text-zinc-700 dark:text-zinc-200">{client.factors.fleet}%</strong>
+                                </span>
+                                <span title={`Domains: ${client.factors.domains}/100`}>
+                                  Dom: <strong className="text-zinc-700 dark:text-zinc-200">{client.factors.domains}%</strong>
+                                </span>
+                                <span title={`Support: ${client.factors.support}/100`}>
+                                  SLA: <strong className="text-zinc-700 dark:text-zinc-200">{client.factors.support}%</strong>
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-3.5">
+                              <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 font-medium">
+                                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                                {client.primaryRisk}
+                              </span>
+                            </td>
+                            <td className="py-3.5 text-right">
+                              <Link
+                                href={`/admin/clients/${client.id}`}
+                                className="px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200/60 dark:border-blue-800/60 font-tech font-semibold hover:bg-blue-600 hover:text-white transition inline-flex items-center gap-1"
+                              >
+                                <span>360° Profile</span>
+                                <ArrowRight className="w-3 h-3" />
+                              </Link>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
           )}
 
           {/* TAB 2: Fleet Runtime & Healing */}
@@ -705,6 +963,133 @@ export function AdminDashboardView({
                               <CreditCard className="w-3 h-3" />
                               <span>Record Payment</span>
                             </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 30 / 60 / 90-Day Revenue & Contract Renewal Forecast (shown in Overview/Radar and Commercial/Billing tabs) */}
+          {(activeTab === "radar" || activeTab === "billing") && cashflowForecast && (
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 rounded-2xl p-6 shadow-xs space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="steel-heading text-lg text-zinc-900 dark:text-white flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                    30 / 60 / 90-Day Revenue &amp; Contract Renewal Forecast
+                  </h2>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                    Projected cashflow velocity combining open receivables, recurring retainer cycles, and upcoming tenure renewal boundaries.
+                  </p>
+                </div>
+                <Link
+                  href="/admin/contracts"
+                  className="px-3.5 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-800 text-xs font-tech font-semibold text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/60 transition flex items-center gap-1.5 w-fit"
+                >
+                  <FileText className="w-3.5 h-3.5 text-blue-500" />
+                  <span>Manage Contracts &amp; Tenures</span>
+                  <ExternalLink className="w-3 h-3" />
+                </Link>
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800">
+                  <span className="text-[11px] font-tech uppercase text-zinc-400 block">Expected 30-Day Collections</span>
+                  <span className="text-lg font-bold font-tech text-zinc-900 dark:text-white mt-1 block">
+                    {formatCurrency(cashflowForecast.expectedNext30DaysMinor, "INR")}
+                  </span>
+                  <span className="text-[11px] text-zinc-500">
+                    Includes {formatCurrency(cashflowForecast.overdueCollectibleMinor, "INR")} overdue collectible
+                  </span>
+                </div>
+                <div className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800">
+                  <span className="text-[11px] font-tech uppercase text-zinc-400 block">Expected 60-Day Collections</span>
+                  <span className="text-lg font-bold font-tech text-blue-600 dark:text-blue-400 mt-1 block">
+                    {formatCurrency(cashflowForecast.expectedNext60DaysMinor, "INR")}
+                  </span>
+                  <span className="text-[11px] text-zinc-500">Cumulative 60d retainer velocity</span>
+                </div>
+                <div className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800">
+                  <span className="text-[11px] font-tech uppercase text-zinc-400 block">Expected 90-Day Collections</span>
+                  <span className="text-lg font-bold font-tech text-emerald-600 dark:text-emerald-400 mt-1 block">
+                    {formatCurrency(cashflowForecast.expectedNext90DaysMinor, "INR")}
+                  </span>
+                  <span className="text-[11px] text-zinc-500">Quarterly projected pipeline</span>
+                </div>
+                <div className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800">
+                  <span className="text-[11px] font-tech uppercase text-zinc-400 block">Scheduled Renewals (30d)</span>
+                  <div className="flex items-baseline gap-2 mt-1">
+                    <span className="text-lg font-bold font-tech text-zinc-900 dark:text-white">
+                      {cashflowForecast.scheduledRenewals30DaysCount}
+                    </span>
+                    <span className="text-xs font-tech text-amber-600 dark:text-amber-400 font-semibold">
+                      ({cashflowForecast.manualRenewalAtRiskCount} Manual Risk)
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-zinc-500">
+                    Renewal Value: {formatCurrency(cashflowForecast.scheduledRenewals30DaysMinor, "INR")}
+                  </span>
+                </div>
+              </div>
+
+              {cashflowForecast.upcomingBillingEvents.length > 0 && (
+                <div className="overflow-x-auto pt-2">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-zinc-100 dark:border-zinc-800 text-zinc-400 font-tech uppercase tracking-wider">
+                        <th className="pb-2.5 font-semibold">Contract</th>
+                        <th className="pb-2.5 font-semibold">Client Tenant</th>
+                        <th className="pb-2.5 font-semibold">Cycle</th>
+                        <th className="pb-2.5 font-semibold">Next Billing Date</th>
+                        <th className="pb-2.5 font-semibold">Cycle Amount</th>
+                        <th className="pb-2.5 font-semibold text-right">Renewal Autopilot</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+                      {cashflowForecast.upcomingBillingEvents.map((ev) => (
+                        <tr key={`${ev.contractId}_${ev.billingDateMs}`} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition">
+                          <td className="py-3 font-tech font-bold text-blue-600 dark:text-blue-400">
+                            {ev.contractCode}
+                          </td>
+                          <td className="py-3 font-medium text-zinc-900 dark:text-white">
+                            {ev.clientName}
+                          </td>
+                          <td className="py-3 text-zinc-500 font-tech">
+                            {ev.cycleLabel}
+                          </td>
+                          <td className="py-3 font-tech text-zinc-700 dark:text-zinc-300">
+                            <span className="inline-flex items-center gap-1.5">
+                              <Calendar className="w-3.5 h-3.5 text-zinc-400" />
+                              {ev.billingDateLabel}
+                            </span>
+                          </td>
+                          <td className="py-3 font-tech font-bold text-zinc-900 dark:text-white">
+                            {formatCurrency(ev.amountMinor, ev.currency)}
+                          </td>
+                          <td className="py-3 text-right">
+                            {ev.isRenewalBoundary ? (
+                              <button
+                                type="button"
+                                disabled={rollingContractId === ev.contractId}
+                                onClick={() => handleRollForwardContract(ev.contractId, ev.contractCode)}
+                                className="px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border border-amber-500/30 font-tech font-semibold text-xs transition inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                {rollingContractId === ev.contractId ? (
+                                  <IosSpinner size={12} />
+                                ) : (
+                                  <RefreshCw className="w-3 h-3" />
+                                )}
+                                <span>Roll-Forward Renewal</span>
+                              </button>
+                            ) : (
+                              <span className="text-[11px] font-tech text-emerald-600 dark:text-emerald-400">
+                                Active Tenure
+                              </span>
+                            )}
                           </td>
                         </tr>
                       ))}

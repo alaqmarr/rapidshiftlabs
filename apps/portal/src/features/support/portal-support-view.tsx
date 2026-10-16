@@ -16,6 +16,8 @@ import {
   X,
   Search,
   User,
+  Terminal,
+  Sparkles,
 } from "lucide-react";
 import { useAlert } from "@/components/ui/alert-popup";
 import { IosSpinner } from "@/components/ui/ios-spinner";
@@ -787,6 +789,54 @@ export function PortalSupportView({
                   </div>
                 ) : (
                   messages.map((m) => {
+                    if (m.body && m.body.trim().startsWith("[SYSTEM TELEMETRY SNAPSHOT]")) {
+                      const rows = m.body
+                        .split("\n")
+                        .map((l) => l.trim())
+                        .filter((l) => l && !l.startsWith("[SYSTEM TELEMETRY SNAPSHOT]"))
+                        .map((l) => {
+                          const cleaned = l.replace(/^[•\-*]\s*/, "");
+                          const idx = cleaned.indexOf(":");
+                          if (idx === -1) return { label: "Telemetry", value: cleaned };
+                          return {
+                            label: cleaned.slice(0, idx).trim(),
+                            value: cleaned.slice(idx + 1).trim(),
+                          };
+                        });
+
+                      return (
+                        <div
+                          key={m.id}
+                          className="rounded-2xl border border-emerald-500/30 dark:border-emerald-700/50 bg-gradient-to-br from-emerald-50/70 via-white to-blue-50/50 dark:from-emerald-950/25 dark:via-zinc-900 dark:to-blue-950/25 p-4 shadow-xs space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between gap-2 border-b border-emerald-200/70 dark:border-emerald-800/50 pb-2">
+                            <span className="inline-flex items-center gap-1.5 font-tech text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                              <Terminal className="w-3.5 h-3.5 text-emerald-500" />
+                              Live System Telemetry Snapshot
+                            </span>
+                            <span className="font-mono text-[11px] text-zinc-400">
+                              {formatDateTime(m.createdAt)}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {rows.map((r, idx) => (
+                              <div
+                                key={idx}
+                                className="p-2.5 rounded-xl bg-white/90 dark:bg-zinc-950/70 border border-zinc-200/70 dark:border-zinc-800 text-xs"
+                              >
+                                <div className="text-[10px] font-tech font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+                                  {r.label}
+                                </div>
+                                <div className="text-zinc-800 dark:text-zinc-200 font-medium mt-0.5 leading-snug">
+                                  {r.value}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    }
+
                     const isStaff =
                       m.senderType === "staff" || m.senderType === "system";
                     return (
@@ -1071,6 +1121,46 @@ export function PortalSupportView({
                   className="w-full px-3.5 py-2 text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
                 />
               </div>
+
+              {(() => {
+                const combinedText = `${ticketForm.subject} ${ticketForm.message}`.toLowerCase();
+                const criticalKeywords = [
+                  "502",
+                  "500",
+                  "down",
+                  "outage",
+                  "crash",
+                  "ssl expired",
+                  "payment failed",
+                ];
+                const matchedKeyword = criticalKeywords.find((kw) =>
+                  combinedText.includes(kw)
+                );
+                return (
+                  <div
+                    className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${
+                      matchedKeyword
+                        ? "bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200"
+                        : "bg-emerald-50/70 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-800/60 text-emerald-900 dark:text-emerald-200"
+                    }`}
+                  >
+                    <Sparkles className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <div className="font-tech font-bold text-[11px] uppercase tracking-wider flex items-center gap-2">
+                        <span>Smart Context-Aware Triage</span>
+                        {matchedKeyword && (
+                          <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px]">
+                            Urgent Signal: &ldquo;{matchedKeyword}&rdquo;
+                          </span>
+                        )}
+                      </div>
+                      <p className="leading-relaxed">
+                        Smart Auto-Triage Active: Live PM2, Domain SSL, and Contract Tenure telemetry will be automatically attached to this ticket.
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="flex justify-end gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
                 <button

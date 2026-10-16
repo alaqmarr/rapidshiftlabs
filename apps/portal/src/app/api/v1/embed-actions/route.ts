@@ -23,8 +23,13 @@ export async function POST(request: NextRequest) {
     const container = getContainer();
     let resolvedClientId = reqClientId;
 
-    // 1. Verify API key (rpk_live_... or rsk_live_...) if provided in body
-    if (rawCredential && (rawCredential.startsWith("rpk_") || rawCredential.startsWith("rsk_"))) {
+    // 1. Verify API key (rsl_live_..., rpk_live_..., or rsk_live_...) if provided in body
+    if (
+      rawCredential &&
+      (rawCredential.startsWith("rsl_") ||
+        rawCredential.startsWith("rpk_") ||
+        rawCredential.startsWith("rsk_"))
+    ) {
       const verifiedKey = await container.apiPlatformModule.validateApiKey(rawCredential);
       if (!verifiedKey || !verifiedKey.valid || !verifiedKey.clientId) {
         return NextResponse.json(
@@ -312,6 +317,31 @@ export async function POST(request: NextRequest) {
           success: true,
           action: "reveal-credential",
           revealed,
+        });
+      }
+
+      case "request-contract-renewal": {
+        const { contractCode, requestedTenure, notes } = payload;
+        const subject = `[RENEWAL REQUEST] Contract ${contractCode || "Active Engagement"} Tenure Extension`;
+        const bodyMsg = `Client requested contract renewal / tenure extension directly via live embed widget.\n• Contract: ${contractCode || "Primary Contract"}\n• Requested Tenure: ${requestedTenure || "Same Tenure Roll-Forward"}\n${notes ? `• Notes: ${notes}` : ""}`;
+
+        const { ticket } = await container.support.createTicketUseCase.execute(
+          {
+            clientId: resolvedClientId,
+            subject,
+            message: bodyMsg,
+            priority: "P2",
+            category: "billing",
+            source: "portal",
+          },
+          clientActor
+        );
+
+        return NextResponse.json({
+          success: true,
+          action: "request-contract-renewal",
+          ticket: ticket.toState(),
+          message: "Renewal request submitted to commercial desk.",
         });
       }
 

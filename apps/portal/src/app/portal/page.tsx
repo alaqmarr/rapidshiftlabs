@@ -12,6 +12,7 @@ import {
   type PortalReleaseItem,
 } from "@/features/portal/portal-dashboard-view";
 import { pickPrimaryClientContract } from "@/lib/contract-tenure";
+import { generateMonthlyClientDigest } from "@/lib/smart-intelligence";
 
 export const dynamic = "force-dynamic";
 
@@ -203,6 +204,18 @@ export default async function ClientPortalOverviewPage() {
     }))
   );
 
+  const monthlyDigest = generateMonthlyClientDigest({
+    clientName,
+    currency: clientCurrency,
+    healthScore: health.overallScore,
+    healthTier: health.tier,
+    domains,
+    processes,
+    releases,
+    tickets,
+    activeContract: primaryContract,
+  });
+
   return (
     <PortalDashboardView
       user={{ email: userEmail, role: userRole }}
@@ -234,6 +247,7 @@ export default async function ClientPortalOverviewPage() {
       recentInvoices={recentInvoices}
       activeContractsCount={contractsRes.total}
       activeContract={primaryContract}
+      monthlyDigest={monthlyDigest}
       processes={processes}
       domains={domains}
       tickets={tickets}

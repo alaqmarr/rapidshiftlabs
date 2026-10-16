@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
+import { SYSTEM_ACTOR } from "@rsl/core/kernel";
+import { renderTicketCreatedEmail } from "@rsl/core/settings";
 import { getRequestActor } from "@/lib/auth-actor";
+import { calculateContractTenure, pickPrimaryClientContract } from "@/lib/contract-tenure";
 
 export const dynamic = "force-dynamic";
+
+const CRITICAL_INCIDENT_REGEX =
+  /\b(502|503|504|500|down|outage|crash|crashing|unresponsive|ssl expired|certificate expired|payment failed|checkout broken|production broken|urgent|emergency)\b/i;
 
 export async function GET(req: NextRequest) {
   try {
@@ -37,8 +43,6 @@ export async function GET(req: NextRequest) {
   }
 }
 
-import { renderTicketCreatedEmail } from "@rsl/core/settings";
-
 export async function POST(req: NextRequest) {
   try {
     const actor = await getRequestActor(req);
@@ -49,12 +53,125 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const container = getContainer();
 
+    const targetClientId =
+      body.clientId || (actor.kind === "client_user" ? actor.clientId : undefined);
+
+    // Gather live telemetry for Smart Auto-Triage & System Snapshot
+    let clientProcesses: any[] = [];
+    let clientDomains: any[] = [];
+    let clientContracts: any[] = [];
+    if (targetClientId) {
+      const [procs, doms, contractsRes] = await Promise.all([
+        container.pm2ProcessRepo.listByClientId(targetClientId).catch(() => []),
+        container.monitoredDomainRepo.findByClientId(targetClientId).catch(() => []),
+        container.contractRepo.list({ clientId: targetClientId, limit: 5 }).catch(() => ({ items: [] })),
+      ]);
+      clientProcesses = procs || [];
+      clientDomains = doms || [];
+      clientContracts = contractsRes.items || [];
+    }
+
+    const erroredProcs = clientProcesses.filter(
+      (p: any) =>
+        p.status === "errored" ||
+        p.status === "stopped" ||
+        (p.status === "online" && p.uptimeMs > 0 && p.uptimeMs < 30_000 && (p.restarts || 0) >= 8),
+    );
+    const downDomains = clientDomains.filter(
+      (d: any) => d.status === "down" || d.status === "degraded",
+    );
+    const combinedText = `${body.subject || ""} ${body.message || body.body || ""}`;
+    const hasCriticalKeywords = CRITICAL_INCIDENT_REGEX.test(combinedText);
+
+    let effectivePriority = body.priority || "P3";
+    let autoTriageNote: string | null = null;
+
+    if (effectivePriority === "P3" || effectivePriority === "P4") {
+      if ((erroredProcs.length > 0 || downDomains.length > 0) && hasCriticalKeywords) {
+        effectivePriority = "P1";
+        autoTriageNote = `Auto-Promoted to P1 Urgent (Live infra incident confirmed + critical keyword match)`;
+      } else if (erroredProcs.length > 0 || downDomains.length > 0) {
+        effectivePriority = "P2";
+        autoTriageNote = `Auto-Promoted to P2 High (Active infrastructure alert detected for tenant)`;
+      } else if (hasCriticalKeywords) {
+        effectivePriority = "P2";
+        autoTriageNote = `Auto-Promoted to P2 High (Critical outage signature detected in ticket text)`;
+      }
+    }
+
     const { ticket, message } = await container.support.createTicketUseCase.execute(
-      body,
+      {
+        ...body,
+        clientId: targetClientId || body.clientId,
+        priority: effectivePriority,
+      },
       actor,
     );
 
     const ticketState = ticket.toState();
+
+    // Attach Automated Live System Telemetry Snapshot to Ticket Thread
+    try {
+      const onlineCount = clientProcesses.filter((p: any) => p.status === "online").length;
+      const upDomCount = clientDomains.filter((d: any) => d.status === "up").length;
+      const primaryContract = pickPrimaryClientContract(clientContracts);
+      const tenure = primaryContract
+        ? calculateContractTenure({
+            billingCycle: primaryContract.billingCycle,
+            intervalCount: primaryContract.intervalCount,
+            anchorDay: primaryContract.anchorDay,
+            validFrom: primaryContract.validFrom,
+            validTo: primaryContract.validTo,
+            amountMinor: primaryContract.amountMinor,
+            status: primaryContract.status,
+          })
+        : null;
+
+      const procSummary =
+        clientProcesses.length > 0
+          ? clientProcesses
+              .slice(0, 4)
+              .map(
+                (p: any) =>
+                  `${p.name}: ${(p.status || "online").toUpperCase()} (${Math.round((p.memory || 0) / (1024 * 1024))}MB, ${p.restarts || 0} deploys/restarts)`,
+              )
+              .join(" | ")
+          : "No mapped PM2 processes";
+
+      const domSummary =
+        clientDomains.length > 0
+          ? clientDomains
+              .slice(0, 4)
+              .map(
+                (d: any) =>
+                  `${d.hostname}: ${(d.status || "up").toUpperCase()} (SSL: ${d.sslExpiryDays ?? "—"}d)`,
+              )
+              .join(" | ")
+          : "No monitored domains";
+
+      const contractSummary = tenure
+        ? `${primaryContract.code || "Active"} • ${tenure.tenureLabel} (${tenure.dateRangeLabel})`
+        : "No active contract on file";
+
+      const snapshotLines = [
+        `[SYSTEM TELEMETRY SNAPSHOT]`,
+        `• Smart Triage: ${autoTriageNote || `Assigned ${ticketState.priority} (${ticketState.level} SLA Queue)`}`,
+        `• Fleet (PM2): ${onlineCount}/${clientProcesses.length} Online — ${procSummary}`,
+        `• Domains & SSL: ${upDomCount}/${clientDomains.length} Healthy — ${domSummary}`,
+        `• Contract & Tenure: ${contractSummary}`,
+      ];
+
+      await container.support.addTicketMessageUseCase.execute(
+        {
+          ticketId: ticket.id,
+          body: snapshotLines.join("\n"),
+          isInternal: false,
+        },
+        SYSTEM_ACTOR("smart-support-triage"),
+      );
+    } catch (snapErr) {
+      console.warn("[TicketsAPI] Warning: Failed to attach telemetry snapshot:", snapErr);
+    }
 
     // 1. Publish Realtime SSE Event
     try {
@@ -86,13 +203,11 @@ export async function POST(req: NextRequest) {
         const emailSettings = await container.settingsRepo.getEmailSettings();
         const portalBaseUrl = process.env.NEXTAUTH_URL || "http://localhost:3000";
 
-        // Fetch client details
         const client = await container.clientDirectoryRepo.findById(ticketState.clientId);
         const clientName = client?.name || "Client";
         const contacts = await container.clientDirectoryRepo.findContactsByClient(ticketState.clientId);
         const primaryContact = contacts.find((c: any) => c.isPrimary) || contacts[0];
 
-        // 2a. Send confirmation to client
         if (primaryContact && primaryContact.email) {
           const clientTemplate = renderTicketCreatedEmail({
             ticketNumber: ticketState.number,
@@ -115,7 +230,6 @@ export async function POST(req: NextRequest) {
           console.log(`[Ticket Created Email] Confirmation sent to client ${primaryContact.email}`);
         }
 
-        // 2b. Send alert to staff
         const staffEmail = emailSettings.fromEmail || emailSettings.user;
         if (staffEmail) {
           const staffTemplate = renderTicketCreatedEmail({
@@ -146,11 +260,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         ...ticketState,
+        autoTriaged: Boolean(autoTriageNote),
+        autoTriageNote,
         ticket: ticketState,
         message: message.props,
         data: {
           ticket: ticketState,
           message: message.props,
+          autoTriaged: Boolean(autoTriageNote),
+          autoTriageNote,
         },
       },
       { status: 201 },
@@ -162,4 +280,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-

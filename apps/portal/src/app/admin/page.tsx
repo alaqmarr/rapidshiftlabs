@@ -12,6 +12,11 @@ import {
   type AdminUrgentTicketItem,
   type AdminAuditRecordItem,
 } from "@/features/admin/admin-dashboard-view";
+import {
+  calculateCashflowForecast,
+  generateSmartNextActions,
+  correlateCrossModuleIncidents,
+} from "@/lib/smart-intelligence";
 
 export const dynamic = "force-dynamic";
 
@@ -42,7 +47,7 @@ export default async function AdminDashboardPage() {
     recentAudits,
   ] = await Promise.all([
     container.clientDirectoryRepo.list({ limit: 50 }).catch(() => ({ items: [], total: 0 })),
-    container.contractRepo.list({ limit: 1 }).catch(() => ({ items: [], total: 0 })),
+    container.contractRepo.list({ limit: 100 }).catch(() => ({ items: [], total: 0 })),
     container.billingRepo.getBillingSummary().catch(() => ({ outstandingMinor: 0, totalBilledMinor: 0, totalPaidMinor: 0, overdueCount: 0, activeInvoicesCount: 0 })),
     container.billingRepo.listInvoices({ limit: 15 }).catch(() => ({ items: [], total: 0 })),
     container.fleetModule.listServers().catch(() => []),
@@ -218,6 +223,83 @@ export default async function AdminDashboardPage() {
   const erroredProcesses = fleetProcesses.filter((p) => p.status === "errored" || p.status === "stopped").length;
   const atRiskClientsCount = atRiskClients.filter((c) => c.healthCategory === "AT_RISK" || c.healthCategory === "CRITICAL").length;
 
+  // Map Contracts for Smart Intelligence & Cashflow Forecast
+  const mappedContracts = (contractsRes.items || []).map((c: any) => ({
+    id: c.id,
+    code: c.code,
+    clientId: c.clientId,
+    clientName: clientNameMap.get(c.clientId) || c.clientId,
+    status: c.status,
+    billingCycle: c.billingCycle,
+    intervalCount: c.intervalCount,
+    anchorDay: c.anchorDay,
+    validFrom: c.validFrom,
+    validTo: c.validTo,
+    amountMinor: c.amountMinor,
+    currency: c.currency || "INR",
+    autoRenew: Boolean(c.autoRenew),
+  }));
+
+  const cashflowForecast = calculateCashflowForecast({
+    contracts: mappedContracts,
+    invoices: recentInvoices,
+  });
+
+  const smartActions = generateSmartNextActions({
+    contracts: mappedContracts,
+    invoices: recentInvoices,
+    processes: fleetProcesses.map((p) => ({
+      ...p,
+      clientId: p.clientId || undefined,
+    })),
+    domains: monitoredDomains,
+    tickets: urgentTickets.map((t) => ({
+      ...t,
+      ticketNumber: t.ticketNumber || t.id.slice(0, 8),
+      clientName: t.clientName || t.clientId,
+    })),
+  });
+
+  const rawReleases = Array.isArray(releasesList) ? releasesList : (releasesList as any)?.items || [];
+  const correlatedIncidents = correlateCrossModuleIncidents({
+    clients: clientsRes.items.map((c: any) => ({ id: c.id, name: c.name })),
+    processes: fleetProcesses.map((p) => ({
+      ...p,
+      clientId: p.clientId || undefined,
+    })),
+    domains: domainsList.map((d: any) => ({
+      id: d.id,
+      hostname: d.hostname,
+      clientId: d.clientId || undefined,
+      status: d.status,
+      sslExpiryDays: d.sslExpiryDays,
+    })),
+    releases: rawReleases.map((r: any) => ({
+      id: r.id,
+      clientId: r.clientId || undefined,
+      version: r.version || "v1.0.0",
+      channel: r.channel,
+      deployedAt:
+        typeof r.deployedAt === "number"
+          ? r.deployedAt
+          : r.deployedAt
+          ? new Date(r.deployedAt).getTime()
+          : typeof r.createdAt === "number"
+          ? r.createdAt
+          : r.createdAt
+          ? new Date(r.createdAt).getTime()
+          : undefined,
+    })),
+    tickets: urgentTickets.map((t) => ({
+      id: t.id,
+      ticketNumber: t.ticketNumber || t.id.slice(0, 8),
+      subject: t.subject,
+      clientId: t.clientId,
+      priority: t.priority,
+      status: t.status,
+    })),
+  });
+
   return (
     <AdminDashboardView
       user={{ email: userEmail, role: userRole }}
@@ -242,6 +324,9 @@ export default async function AdminDashboardPage() {
       monitoredDomains={monitoredDomains}
       urgentTickets={urgentTickets}
       recentAuditLogs={recentAuditLogs}
+      smartActions={smartActions}
+      cashflowForecast={cashflowForecast}
+      correlatedIncidents={correlatedIncidents}
     />
   );
 }

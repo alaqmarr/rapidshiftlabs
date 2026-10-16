@@ -250,10 +250,14 @@ export function LiveEmbedClient({
   });
   const [submittingTicket, setSubmittingTicket] = useState(false);
 
-  // Payment execution state
+  // Payment execution & self-service renewal state
   const [paymentMethod, setPaymentMethod] = useState<string>("upi");
   const [paymentProcessing, setPaymentProcessing] = useState<boolean>(false);
   const [paymentReceipt, setPaymentReceipt] = useState<any | null>(null);
+  const [showUtrInput, setShowUtrInput] = useState<boolean>(false);
+  const [customUtr, setCustomUtr] = useState<string>("");
+  const [renewalRequestedContracts, setRenewalRequestedContracts] = useState<Record<string, boolean>>({});
+  const [requestingRenewalCode, setRequestingRenewalCode] = useState<string | null>(null);
 
   // Active dashboard tab for full client-dashboard embed
   const [dashboardTab, setDashboardTab] = useState<"billing" | "fleet" | "domains" | "support">("billing");
@@ -274,7 +278,7 @@ export function LiveEmbedClient({
     const ro = new ResizeObserver(notifyParentResize);
     if (containerRef.current) ro.observe(containerRef.current);
     return () => ro.disconnect();
-  }, [widget, invoices, payments, processes, domains, tickets, credentials, releases, activeModal, dashboardTab, invoiceFilter, invoiceSearch]);
+  }, [widget, invoices, payments, processes, domains, tickets, credentials, releases, activeModal, dashboardTab, invoiceFilter, invoiceSearch, showUtrInput, renewalRequestedContracts]);
 
   // Cooldown countdown timer
   useEffect(() => {
@@ -324,65 +328,117 @@ export function LiveEmbedClient({
     setActiveModal("new-ticket");
   };
 
+  // Unified Embed Action Runner (supports both emb_... token and rsl_live_... apiKey)
+  const runAction = async (action: string, payload: Record<string, any> = {}) => {
+    if (action === "pay-invoice") {
+      const invoiceId = payload.invoiceId;
+      try {
+        setPaymentProcessing(true);
+        const res = await fetch("/api/v1/embed-actions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token,
+            apiKey: token?.startsWith("rsl_") ? token : undefined,
+            widget,
+            clientId,
+            action: "pay-invoice",
+            payload: {
+              invoiceId,
+              method: payload.method || paymentMethod || "upi",
+              reference: payload.reference || `TXN-${Date.now().toString(36).toUpperCase()}`,
+              notes: payload.notes,
+            },
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Payment processing failed");
+
+        // Update local state in-place
+        setInvoices((prev) =>
+          prev.map((inv) =>
+            inv.id === invoiceId
+              ? { ...inv, ...(data.invoice || {}), status: "paid", balanceMinor: 0 }
+              : inv
+          )
+        );
+        if (data.payment) {
+          setPayments((prev) => [data.payment, ...prev]);
+          setSummary((prev) => ({
+            ...prev,
+            outstandingMinor: Math.max(0, prev.outstandingMinor - data.payment.amountMinor),
+            totalPaidMinor: prev.totalPaidMinor + data.payment.amountMinor,
+            unpaidCount: Math.max(0, prev.unpaidCount - 1),
+          }));
+        }
+
+        // Update currently selected invoice if details are viewed
+        setSelectedInvoice((prev: any) =>
+          prev && prev.id === invoiceId
+            ? { ...prev, ...(data.invoice || {}), status: "paid", balanceMinor: 0 }
+            : prev
+        );
+
+        setPaymentReceipt({
+          payment: data.payment,
+          invoice: data.invoice,
+        });
+        setShowUtrInput(false);
+        setCustomUtr("");
+
+        triggerAlert("success", `Invoice ${data.invoice?.invoiceNumber || invoiceId} settled in-place.`);
+        return data;
+      } catch (err: any) {
+        triggerAlert("error", err.message || "Failed to process payment");
+      } finally {
+        setPaymentProcessing(false);
+      }
+      return;
+    }
+
+    if (action === "request-contract-renewal") {
+      const codeKey = payload.contractCode || "primary";
+      try {
+        setRequestingRenewalCode(codeKey);
+        const res = await fetch("/api/v1/embed-actions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token,
+            apiKey: token?.startsWith("rsl_") ? token : undefined,
+            widget,
+            clientId,
+            action: "request-contract-renewal",
+            payload,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to submit renewal request");
+
+        if (data.ticket) {
+          setTickets((prev) => [data.ticket, ...prev]);
+        }
+        setRenewalRequestedContracts((prev) => ({ ...prev, [codeKey]: true }));
+        triggerAlert("success", "Renewal Request Sent to Commercial Desk");
+        return data;
+      } catch (err: any) {
+        triggerAlert("error", err.message || "Failed to submit renewal request");
+      } finally {
+        setRequestingRenewalCode(null);
+      }
+      return;
+    }
+  };
+
   // 1. IN-PLACE ACTION: Pay Invoice
   const handlePayInvoice = async (invoiceId: string) => {
-    try {
-      setPaymentProcessing(true);
-      const res = await fetch("/api/v1/embed-actions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token,
-          widget,
-          clientId,
-          action: "pay-invoice",
-          payload: {
-            invoiceId,
-            method: paymentMethod,
-            reference: `TXN-${Date.now().toString(36).toUpperCase()}`,
-          },
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Payment processing failed");
-
-      // Update local state in-place
-      setInvoices((prev) =>
-        prev.map((inv) =>
-          inv.id === invoiceId
-            ? { ...inv, ...(data.invoice || {}), status: "paid", balanceMinor: 0 }
-            : inv
-        )
-      );
-      if (data.payment) {
-        setPayments((prev) => [data.payment, ...prev]);
-        setSummary((prev) => ({
-          ...prev,
-          outstandingMinor: Math.max(0, prev.outstandingMinor - data.payment.amountMinor),
-          totalPaidMinor: prev.totalPaidMinor + data.payment.amountMinor,
-          unpaidCount: Math.max(0, prev.unpaidCount - 1),
-        }));
-      }
-
-      // Update currently selected invoice if details are viewed
-      setSelectedInvoice((prev: any) =>
-        prev && prev.id === invoiceId
-          ? { ...prev, ...(data.invoice || {}), status: "paid", balanceMinor: 0 }
-          : prev
-      );
-
-      setPaymentReceipt({
-        payment: data.payment,
-        invoice: data.invoice,
-      });
-
-      triggerAlert("success", `Invoice ${data.invoice?.invoiceNumber || invoiceId} settled in-place.`);
-    } catch (err: any) {
-      triggerAlert("error", err.message || "Failed to process payment");
-    } finally {
-      setPaymentProcessing(false);
-    }
+    await runAction("pay-invoice", {
+      invoiceId,
+      method: paymentMethod,
+      reference: customUtr.trim() || undefined,
+    });
   };
 
   // 2. IN-PLACE ACTION: Restart Process
@@ -883,28 +939,32 @@ export function LiveEmbedClient({
                   No active contracts registered for {clientName}. ({invoices.length} standalone invoice(s) on file).
                 </div>
               ) : (
-                contracts.map((ctr: any) => {
-                  const isActive = ctr.status === "active";
+                contracts.map((activeContract: any) => {
+                  const isActive = activeContract.status === "active";
                   const tenure = calculateContractTenure({
-                    billingCycle: ctr.billingCycle || "monthly",
-                    intervalCount: ctr.intervalCount || 1,
-                    anchorDay: ctr.anchorDay || 1,
-                    validFrom: ctr.validFrom,
-                    validTo: ctr.validTo,
-                    amountMinor: ctr.amountMinor || 0,
-                    currency: ctr.currency || "INR",
-                    status: ctr.status,
+                    billingCycle: activeContract.billingCycle || "monthly",
+                    intervalCount: activeContract.intervalCount || 1,
+                    anchorDay: activeContract.anchorDay || 1,
+                    validFrom: activeContract.validFrom,
+                    validTo: activeContract.validTo,
+                    amountMinor: activeContract.amountMinor || 0,
+                    currency: activeContract.currency || "INR",
+                    status: activeContract.status,
                   });
+                  const contractCodeKey = activeContract.code || "primary";
+                  const isRenewalSent = Boolean(renewalRequestedContracts[contractCodeKey]);
+                  const isRequestingRenewal = requestingRenewalCode === contractCodeKey;
+
                   return (
-                    <div key={ctr.id} className={`p-4 rounded-xl border ${itemBgClass} space-y-3 text-xs`}>
+                    <div key={activeContract.id} className={`p-4 rounded-xl border ${itemBgClass} space-y-3 text-xs`}>
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className={`font-steel font-bold text-sm ${headingTextClass}`}>
-                              {ctr.title}
+                              {activeContract.title}
                             </span>
                             <span className={`font-mono text-[10px] ${subtleTextClass}`}>
-                              ({ctr.code})
+                              ({activeContract.code})
                             </span>
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600/15 text-blue-500 border border-blue-500/30">
                               {tenure.tenureLabel}
@@ -921,7 +981,7 @@ export function LiveEmbedClient({
                               : "bg-amber-500/15 text-amber-500 border border-amber-500/30"
                           }`}
                         >
-                          {ctr.status}
+                          {activeContract.status}
                         </span>
                       </div>
 
@@ -946,7 +1006,7 @@ export function LiveEmbedClient({
                             {tenure.isOneTime ? "One-Time Fee" : "Cycle Retainer"}
                           </div>
                           <div className={`font-mono font-bold text-xs mt-0.5 ${headingTextClass}`}>
-                            ₹{formatMinorToINR(ctr.amountMinor)}
+                            ₹{formatMinorToINR(activeContract.amountMinor)}
                           </div>
                         </div>
                         <div className={`p-2.5 rounded-lg border ${isDark ? "bg-zinc-900/60 border-zinc-800" : "bg-white border-zinc-200"}`}>
@@ -960,9 +1020,43 @@ export function LiveEmbedClient({
                           <div className={`font-mono font-bold text-xs uppercase mt-0.5 ${headingTextClass}`}>
                             {tenure.isOneTime
                               ? "One-Time"
-                              : `${getBillingCycleLabel(ctr.billingCycle, ctr.intervalCount)}`}
+                              : `${getBillingCycleLabel(activeContract.billingCycle, activeContract.intervalCount)}`}
                           </div>
                         </div>
+                      </div>
+
+                      {/* Self-Service Contract Tenure Renewal Bar */}
+                      <div className={`pt-2 border-t ${headerBorderClass} flex flex-wrap items-center justify-between gap-2`}>
+                        <span className={`text-[11px] ${subtleTextClass}`}>
+                          {!tenure.isOneTime
+                            ? `Auto-anchors ${tenure.nextBillingDateLabel}`
+                            : "Extend scope or convert to recurring retainer"}
+                        </span>
+                        {isRenewalSent ? (
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 text-[11px] font-bold inline-flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>Renewal Request Sent to Commercial Desk</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={isRequestingRenewal}
+                            onClick={() =>
+                              runAction("request-contract-renewal", {
+                                contractCode: activeContract.code,
+                                requestedTenure: tenure.tenureLabel,
+                              })
+                            }
+                            className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-bold font-steel shadow-xs transition cursor-pointer inline-flex items-center gap-1.5"
+                          >
+                            {isRequestingRenewal ? (
+                              <IosSpinner size="xs" className="text-white" />
+                            ) : (
+                              <Calendar className="w-3.5 h-3.5" />
+                            )}
+                            <span>Request Tenure Renewal</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -976,23 +1070,27 @@ export function LiveEmbedClient({
               const dueMs = targetInvoice?.dueDate ? new Date(targetInvoice.dueDate).getTime() : null;
               const diffDays = dueMs ? Math.ceil((dueMs - Date.now()) / (1000 * 60 * 60 * 24)) : null;
               const isOverdue = diffDays !== null && diffDays < 0;
-              const primaryContractTenure = contracts[0]
+              const activeContract = contracts[0];
+              const tenure = activeContract
                 ? calculateContractTenure({
-                    billingCycle: contracts[0].billingCycle || "monthly",
-                    intervalCount: contracts[0].intervalCount || 1,
-                    anchorDay: contracts[0].anchorDay || 1,
-                    validFrom: contracts[0].validFrom,
-                    validTo: contracts[0].validTo,
-                    amountMinor: contracts[0].amountMinor || 0,
-                    currency: contracts[0].currency || "INR",
-                    status: contracts[0].status,
+                    billingCycle: activeContract.billingCycle || "monthly",
+                    intervalCount: activeContract.intervalCount || 1,
+                    anchorDay: activeContract.anchorDay || 1,
+                    validFrom: activeContract.validFrom,
+                    validTo: activeContract.validTo,
+                    amountMinor: activeContract.amountMinor || 0,
+                    currency: activeContract.currency || "INR",
+                    status: activeContract.status,
                   })
                 : null;
+              const contractCodeKey = activeContract?.code || "primary";
+              const isRenewalSent = Boolean(renewalRequestedContracts[contractCodeKey]);
+              const isRequestingRenewal = requestingRenewalCode === contractCodeKey;
 
               return (
                 <div className="space-y-3">
                   <div
-                    className={`p-4 rounded-xl border flex items-center justify-between ${
+                    className={`p-4 rounded-xl border flex flex-wrap items-center justify-between gap-3 ${
                       targetInvoice
                         ? isOverdue
                           ? "bg-rose-500/10 border-rose-500/30"
@@ -1004,8 +1102,8 @@ export function LiveEmbedClient({
                       <span className={`text-[10px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>
                         {targetInvoice
                           ? `Invoice ${targetInvoice.invoiceNumber} Due Date`
-                          : primaryContractTenure && !primaryContractTenure.isOneTime
-                          ? `Next Scheduled Billing (${primaryContractTenure.shortTenureLabel} Tenure)`
+                          : tenure && !tenure.isOneTime
+                          ? `Next Scheduled Billing (${tenure.shortTenureLabel} Tenure)`
                           : "Account Settlement Status"}
                       </span>
                       <div
@@ -1024,8 +1122,8 @@ export function LiveEmbedClient({
                             : isOverdue
                             ? `${Math.abs(diffDays!)} Days Overdue`
                             : `Due in ${diffDays} Days`
-                          : primaryContractTenure && !primaryContractTenure.isOneTime
-                          ? primaryContractTenure.nextBillingDateLabel
+                          : tenure && !tenure.isOneTime
+                          ? tenure.nextBillingDateLabel
                           : "No Pending Dues"}
                       </div>
                       <p className={`text-[11px] mt-0.5 ${subtleTextClass}`} suppressHydrationWarning>
@@ -1033,211 +1131,372 @@ export function LiveEmbedClient({
                           ? `Target Date: ${formatDate(targetInvoice.dueDate)} • Balance: ₹${formatMinorToINR(
                               targetInvoice.balanceMinor ?? targetInvoice.totalMinor
                             )}`
-                          : primaryContractTenure
-                          ? `${contracts[0].title} • ${primaryContractTenure.tenureLabel} (${primaryContractTenure.remainingLabel})`
+                          : tenure && activeContract
+                          ? `${activeContract.title} • ${tenure.tenureLabel} (${tenure.remainingLabel})`
                           : `${paidCount} settled invoice(s) on record`}
                       </p>
                     </div>
-                    {targetInvoice && (
-                      <button
-                        onClick={() => {
-                          setSelectedInvoice(targetInvoice);
-                          setActiveModal("pay");
-                        }}
-                        className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold font-steel shadow-md transition cursor-pointer flex items-center gap-1.5 shrink-0"
-                      >
-                        <CreditCard className="w-3.5 h-3.5" />
-                        <span>Settle Now</span>
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                      {targetInvoice && (
+                        <button
+                          onClick={() => {
+                            setSelectedInvoice(targetInvoice);
+                            setActiveModal("pay");
+                          }}
+                          className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold font-steel shadow-md transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                        >
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span>Settle Now</span>
+                        </button>
+                      )}
+                      {activeContract && tenure && (!tenure.isOneTime || activeContract) && (
+                        isRenewalSent ? (
+                          <span className="px-2.5 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 text-[11px] font-bold inline-flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>Renewal Request Sent to Commercial Desk</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={isRequestingRenewal}
+                            onClick={() =>
+                              runAction("request-contract-renewal", {
+                                contractCode: activeContract.code,
+                                requestedTenure: tenure.tenureLabel,
+                              })
+                            }
+                            className={`px-3 py-2 rounded-xl border text-xs font-bold font-steel transition cursor-pointer inline-flex items-center gap-1.5 ${buttonSecondaryClass}`}
+                          >
+                            {isRequestingRenewal ? (
+                              <IosSpinner size="xs" className="text-current" />
+                            ) : (
+                              <Calendar className="w-3.5 h-3.5 text-blue-500" />
+                            )}
+                            <span>Request Tenure Renewal</span>
+                          </button>
+                        )
+                      )}
+                    </div>
                   </div>
                 </div>
               );
             })()
           ) : widget === "due-banner" ? (
             /* DEDICATED VIEW: COMPACT DUE BANNER */
-            summary.outstandingMinor > 0 ? (
-              <div className="p-4 rounded-xl bg-gradient-to-r from-rose-500/15 via-rose-500/5 to-transparent border border-rose-500/30 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-500 flex items-center justify-center shrink-0">
-                    <AlertTriangle className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className={`text-sm font-extrabold font-steel ${headingTextClass}`}>
-                      Outstanding Balance: ₹{formatMinorToINR(summary.outstandingMinor)}
+            (() => {
+              const unpaidInvoice = unpaidInvoices[0];
+              return summary.outstandingMinor > 0 ? (
+                <div className="p-4 rounded-xl bg-gradient-to-r from-rose-500/15 via-rose-500/5 to-transparent border border-rose-500/30 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-500 flex items-center justify-center shrink-0">
+                        <AlertTriangle className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className={`text-sm font-extrabold font-steel ${headingTextClass}`}>
+                          Outstanding Balance: ₹{formatMinorToINR(summary.outstandingMinor)}
+                        </div>
+                        <p className={`text-[11px] ${subtleTextClass}`} suppressHydrationWarning>
+                          {unpaidCount} unpaid invoice{unpaidCount === 1 ? "" : "s"}
+                          {unpaidInvoice?.dueDate ? ` • Earliest Due: ${formatDate(unpaidInvoice.dueDate)}` : ""}
+                        </p>
+                      </div>
                     </div>
-                    <p className={`text-[11px] ${subtleTextClass}`} suppressHydrationWarning>
-                      {unpaidCount} unpaid invoice{unpaidCount === 1 ? "" : "s"}
-                      {unpaidInvoices[0]?.dueDate ? ` • Earliest Due: ${formatDate(unpaidInvoices[0].dueDate)}` : ""}
-                    </p>
-                  </div>
-                </div>
-                {unpaidInvoices[0] && (
-                  <button
-                    onClick={() => {
-                      setSelectedInvoice(unpaidInvoices[0]);
-                      setActiveModal("pay");
-                    }}
-                    className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold font-steel shadow-md transition cursor-pointer flex items-center gap-1.5"
-                  >
-                    <CreditCard className="w-3.5 h-3.5" />
-                    <span>Pay ₹{formatMinorToINR(unpaidInvoices[0].balanceMinor ?? unpaidInvoices[0].totalMinor)}</span>
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-500/15 via-emerald-500/5 to-transparent border border-emerald-500/30 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
-                  <div>
-                    <div className={`text-sm font-extrabold font-steel ${headingTextClass}`}>
-                      All Invoices Settled &bull; ₹0 Due
-                    </div>
-                    <p className={`text-[11px] ${subtleTextClass}`}>
-                      {contracts[0]
-                        ? (() => {
-                            const t = calculateContractTenure(contracts[0]);
-                            return `Contract Tenure: ${t.tenureLabel} • Next Billing: ${t.nextBillingDateLabel}`;
-                          })()
-                        : `Total Paid: ₹${formatMinorToINR(summary.totalPaidMinor)} across ${paidCount} invoice${paidCount === 1 ? "" : "s"}`}
-                    </p>
-                  </div>
-                </div>
-                <span className="px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
-                  Active
-                </span>
-              </div>
-            )
-          ) : (
-            /* DEFAULT BILLING SUMMARY & DASHBOARD BILLING TAB */
-            <>
-              {summary.outstandingMinor > 0 ? (
-                <div className="p-4 rounded-xl bg-gradient-to-br from-rose-500/10 via-blue-500/5 to-transparent border border-rose-500/20 flex items-center justify-between">
-                  <div>
-                    <span className={`text-[11px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>Current Balance Due</span>
-                    <div className="text-2xl sm:text-3xl font-black font-steel tracking-tight text-rose-500 mt-0.5 tabular-nums">
-                      ₹{formatMinorToINR(summary.outstandingMinor)}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-1 rounded-md bg-rose-500/15 text-rose-500 dark:text-rose-400 border border-rose-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
-                      {summary.overdueMinor > 0 ? "Overdue" : `${unpaidCount} Due`}
-                    </span>
-                    {unpaidInvoices[0] && (
-                      <button
-                        onClick={() => {
-                          setSelectedInvoice(unpaidInvoices[0]);
-                          setActiveModal("pay");
-                        }}
-                        className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold font-steel shadow-md transition cursor-pointer flex items-center gap-1.5"
-                      >
-                        <CreditCard className="w-3.5 h-3.5" />
-                        <span>Pay Now</span>
-                      </button>
+                    {unpaidInvoice && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          disabled={paymentProcessing}
+                          onClick={() =>
+                            runAction("pay-invoice", {
+                              invoiceId: unpaidInvoice.id,
+                              method: "upi",
+                              reference: customUtr.trim() || undefined,
+                            })
+                          }
+                          className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold font-steel shadow-md transition cursor-pointer flex items-center gap-1.5"
+                        >
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span>
+                            Quick Settle (₹{formatMinorToINR(unpaidInvoice.balanceMinor ?? unpaidInvoice.totalMinor)})
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowUtrInput((prev) => !prev)}
+                          className={`px-2.5 py-2 rounded-xl border text-[11px] font-semibold transition cursor-pointer ${buttonSecondaryClass}`}
+                        >
+                          {showUtrInput ? "Hide UTR" : "UTR / Ref #"}
+                        </button>
+                      </div>
                     )}
                   </div>
+
+                  {unpaidInvoice && showUtrInput && (
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-2 border-t border-rose-500/20">
+                      <input
+                        type="text"
+                        placeholder="Enter UTR / Payment Reference # (e.g. HDFC26101699201)..."
+                        value={customUtr}
+                        onChange={(e) => setCustomUtr(e.target.value)}
+                        className={`flex-1 px-3 py-1.5 rounded-xl border text-xs font-mono transition ${inputBgClass}`}
+                      />
+                      <button
+                        type="button"
+                        disabled={paymentProcessing}
+                        onClick={() =>
+                          runAction("pay-invoice", {
+                            invoiceId: unpaidInvoice.id,
+                            method: "bank_transfer",
+                            reference: customUtr.trim() || undefined,
+                          })
+                        }
+                        className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold font-steel shadow-xs transition cursor-pointer inline-flex items-center justify-center gap-1.5 shrink-0"
+                      >
+                        {paymentProcessing ? (
+                          <IosSpinner size="xs" className="text-white" />
+                        ) : (
+                          <Check className="w-3.5 h-3.5" />
+                        )}
+                        <span>Submit UTR</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : (
-                <div className="p-4 rounded-xl bg-gradient-to-br from-emerald-500/10 via-blue-500/5 to-transparent border border-emerald-500/20 flex items-center justify-between">
-                  <div>
-                    <span className={`text-[11px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>Current Balance Due</span>
-                    <div className="text-xl sm:text-2xl font-black font-steel tracking-tight text-emerald-500 mt-0.5 flex items-center gap-1.5">
-                      <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-                      <span>Paid in Full</span>
+                <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-500/15 via-emerald-500/5 to-transparent border border-emerald-500/30 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+                    <div>
+                      <div className={`text-sm font-extrabold font-steel ${headingTextClass}`}>
+                        All Invoices Settled &bull; ₹0 Due
+                      </div>
+                      <p className={`text-[11px] ${subtleTextClass}`}>
+                        {contracts[0]
+                          ? (() => {
+                              const t = calculateContractTenure(contracts[0]);
+                              return `Contract Tenure: ${t.tenureLabel} • Next Billing: ${t.nextBillingDateLabel}`;
+                            })()
+                          : `Total Paid: ₹${formatMinorToINR(summary.totalPaidMinor)} across ${paidCount} invoice${paidCount === 1 ? "" : "s"}`}
+                      </p>
                     </div>
                   </div>
-                  <span className="px-3 py-1 rounded-md bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
-                    Settled
+                  <span className="px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
+                    Active
                   </span>
                 </div>
-              )}
-
-              {/* Real 3-Column Financial Ledger Totals */}
-              <div className="grid grid-cols-3 gap-2.5 text-center text-xs">
-                <div className={`p-3 rounded-xl border ${itemBgClass}`}>
-                  <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>Total Billed</p>
-                  <p className={`font-tech font-bold text-xs mt-0.5 tracking-tight tabular-nums ${headingTextClass}`}>
-                    ₹{formatMinorToINR(summary.totalBilledMinor)}
-                  </p>
-                </div>
-                <div className={`p-3 rounded-xl border ${itemBgClass}`}>
-                  <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>Total Paid</p>
-                  <p className="font-tech font-bold text-xs text-emerald-500 mt-0.5 tracking-tight tabular-nums">
-                    ₹{formatMinorToINR(summary.totalPaidMinor)}
-                  </p>
-                </div>
-                <div className={`p-3 rounded-xl border ${itemBgClass}`}>
-                  <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>Overdue</p>
-                  <p className={`font-tech font-bold text-xs mt-0.5 tracking-tight tabular-nums ${summary.overdueMinor > 0 ? "text-rose-500" : headingTextClass}`}>
-                    ₹{formatMinorToINR(summary.overdueMinor)}
-                  </p>
-                </div>
-              </div>
-
-              {/* Real Contract Details Row with Calculated Tenure (if contract exists) */}
-              {contracts[0] &&
-                (() => {
-                  const tenure = calculateContractTenure({
-                    billingCycle: contracts[0].billingCycle || "monthly",
-                    intervalCount: contracts[0].intervalCount || 1,
-                    anchorDay: contracts[0].anchorDay || 1,
-                    validFrom: contracts[0].validFrom,
-                    validTo: contracts[0].validTo,
-                    amountMinor: contracts[0].amountMinor || 0,
-                    currency: contracts[0].currency || "INR",
-                    status: contracts[0].status,
-                  });
-                  return (
-                    <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2 text-xs`}>
-                      <div className="flex items-center justify-between gap-2">
+              );
+            })()
+          ) : (
+            /* DEFAULT BILLING SUMMARY & DASHBOARD BILLING TAB */
+            (() => {
+              const unpaidInvoice = unpaidInvoices[0];
+              return (
+                <>
+                  {summary.outstandingMinor > 0 ? (
+                    <div className="p-4 rounded-xl bg-gradient-to-br from-rose-500/10 via-blue-500/5 to-transparent border border-rose-500/20 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`font-semibold ${headingTextClass}`}>{contracts[0].title}</span>
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600/15 text-blue-500 border border-blue-500/30">
-                              {tenure.tenureLabel}
-                            </span>
+                          <span className={`text-[11px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>Current Balance Due</span>
+                          <div className="text-2xl sm:text-3xl font-black font-steel tracking-tight text-rose-500 mt-0.5 tabular-nums">
+                            ₹{formatMinorToINR(summary.outstandingMinor)}
                           </div>
-                          <p className={`text-[10px] mt-0.5 ${subtleTextClass}`} suppressHydrationWarning>
-                            {tenure.dateRangeLabel} &bull;{" "}
-                            {tenure.isOneTime
-                              ? "One-Time Engagement"
-                              : `Next Billing: ${tenure.nextBillingDateLabel} (${tenure.remainingLabel})`}
-                          </p>
                         </div>
-                        <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-500 text-[10px] font-bold font-tech uppercase tracking-wider shrink-0">
-                          {contracts[0].status}
-                        </span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-2.5 py-1 rounded-md bg-rose-500/15 text-rose-500 dark:text-rose-400 border border-rose-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
+                            {summary.overdueMinor > 0 ? "Overdue" : `${unpaidCount} Due`}
+                          </span>
+                          {unpaidInvoice && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={paymentProcessing}
+                                onClick={() =>
+                                  runAction("pay-invoice", {
+                                    invoiceId: unpaidInvoice.id,
+                                    method: "upi",
+                                    reference: customUtr.trim() || undefined,
+                                  })
+                                }
+                                className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold font-steel shadow-md transition cursor-pointer flex items-center gap-1.5"
+                              >
+                                <CreditCard className="w-3.5 h-3.5" />
+                                <span>Quick Settle</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setShowUtrInput((prev) => !prev)}
+                                className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-semibold transition cursor-pointer ${buttonSecondaryClass}`}
+                              >
+                                {showUtrInput ? "Hide UTR" : "UTR / Ref #"}
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      {!tenure.isOneTime && (
-                        <div className="w-full h-1.5 rounded-full bg-zinc-500/20 overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-blue-500 transition-all"
-                            style={{ width: `${tenure.progressPct}%` }}
+
+                      {unpaidInvoice && showUtrInput && (
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-2 border-t border-rose-500/20">
+                          <input
+                            type="text"
+                            placeholder="Enter UTR / Payment Reference # (e.g. NEFT/UTR-994810)..."
+                            value={customUtr}
+                            onChange={(e) => setCustomUtr(e.target.value)}
+                            className={`flex-1 px-3 py-1.5 rounded-xl border text-xs font-mono transition ${inputBgClass}`}
                           />
+                          <button
+                            type="button"
+                            disabled={paymentProcessing}
+                            onClick={() =>
+                              runAction("pay-invoice", {
+                                invoiceId: unpaidInvoice.id,
+                                method: "bank_transfer",
+                                reference: customUtr.trim() || undefined,
+                              })
+                            }
+                            className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold font-steel shadow-xs transition cursor-pointer inline-flex items-center justify-center gap-1.5 shrink-0"
+                          >
+                            {paymentProcessing ? (
+                              <IosSpinner size="xs" className="text-white" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5" />
+                            )}
+                            <span>Submit UTR Settlement</span>
+                          </button>
                         </div>
                       )}
                     </div>
-                  );
-                })()}
+                  ) : (
+                    <div className="p-4 rounded-xl bg-gradient-to-br from-emerald-500/10 via-blue-500/5 to-transparent border border-emerald-500/20 flex items-center justify-between">
+                      <div>
+                        <span className={`text-[11px] font-bold uppercase tracking-wider font-steel ${subtleTextClass}`}>Current Balance Due</span>
+                        <div className="text-xl sm:text-2xl font-black font-steel tracking-tight text-emerald-500 mt-0.5 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                          <span>Paid in Full</span>
+                        </div>
+                      </div>
+                      <span className="px-3 py-1 rounded-md bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 text-[10px] font-bold uppercase tracking-wider font-tech">
+                        Settled
+                      </span>
+                    </div>
+                  )}
 
-              {/* Quick Action Buttons */}
-              <div className="flex items-center gap-2 pt-1">
-                <button
-                  onClick={() => setActiveModal("invoices-modal")}
-                  className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer ${buttonSecondaryClass}`}
-                >
-                  <span>Invoices ({invoices.length})</span>
-                  <ArrowRight className="w-3.5 h-3.5 opacity-60" />
-                </button>
-                <button
-                  onClick={() => setActiveModal("payments-modal")}
-                  className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer ${buttonSecondaryClass}`}
-                >
-                  <span>Payments ({payments.length})</span>
-                  <ArrowRight className="w-3.5 h-3.5 opacity-60" />
-                </button>
-              </div>
-            </>
+                  {/* Real 3-Column Financial Ledger Totals */}
+                  <div className="grid grid-cols-3 gap-2.5 text-center text-xs">
+                    <div className={`p-3 rounded-xl border ${itemBgClass}`}>
+                      <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>Total Billed</p>
+                      <p className={`font-tech font-bold text-xs mt-0.5 tracking-tight tabular-nums ${headingTextClass}`}>
+                        ₹{formatMinorToINR(summary.totalBilledMinor)}
+                      </p>
+                    </div>
+                    <div className={`p-3 rounded-xl border ${itemBgClass}`}>
+                      <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>Total Paid</p>
+                      <p className="font-tech font-bold text-xs text-emerald-500 mt-0.5 tracking-tight tabular-nums">
+                        ₹{formatMinorToINR(summary.totalPaidMinor)}
+                      </p>
+                    </div>
+                    <div className={`p-3 rounded-xl border ${itemBgClass}`}>
+                      <p className={`text-[10px] uppercase font-bold tracking-wider font-steel ${subtleTextClass}`}>Overdue</p>
+                      <p className={`font-tech font-bold text-xs mt-0.5 tracking-tight tabular-nums ${summary.overdueMinor > 0 ? "text-rose-500" : headingTextClass}`}>
+                        ₹{formatMinorToINR(summary.overdueMinor)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Real Contract Details Row with Calculated Tenure (if contract exists) */}
+                  {contracts[0] &&
+                    (() => {
+                      const activeContract = contracts[0];
+                      const tenure = calculateContractTenure({
+                        billingCycle: activeContract.billingCycle || "monthly",
+                        intervalCount: activeContract.intervalCount || 1,
+                        anchorDay: activeContract.anchorDay || 1,
+                        validFrom: activeContract.validFrom,
+                        validTo: activeContract.validTo,
+                        amountMinor: activeContract.amountMinor || 0,
+                        currency: activeContract.currency || "INR",
+                        status: activeContract.status,
+                      });
+                      const contractCodeKey = activeContract.code || "primary";
+                      const isRenewalSent = Boolean(renewalRequestedContracts[contractCodeKey]);
+                      const isRequestingRenewal = requestingRenewalCode === contractCodeKey;
+
+                      return (
+                        <div className={`p-3.5 rounded-xl border ${itemBgClass} space-y-2 text-xs`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={`font-semibold ${headingTextClass}`}>{activeContract.title}</span>
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600/15 text-blue-500 border border-blue-500/30">
+                                  {tenure.tenureLabel}
+                                </span>
+                              </div>
+                              <p className={`text-[10px] mt-0.5 ${subtleTextClass}`} suppressHydrationWarning>
+                                {tenure.dateRangeLabel} &bull;{" "}
+                                {tenure.isOneTime
+                                  ? "One-Time Engagement"
+                                  : `Next Billing: ${tenure.nextBillingDateLabel} (${tenure.remainingLabel})`}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {isRenewalSent ? (
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 text-[10px] font-bold inline-flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                  <span>Renewal Request Sent to Commercial Desk</span>
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={isRequestingRenewal}
+                                  onClick={() =>
+                                    runAction("request-contract-renewal", {
+                                      contractCode: activeContract.code,
+                                      requestedTenure: tenure.tenureLabel,
+                                    })
+                                  }
+                                  className={`px-2.5 py-1 rounded-lg border text-[10px] font-bold font-steel transition cursor-pointer inline-flex items-center gap-1 ${buttonSecondaryClass}`}
+                                >
+                                  <Calendar className="w-3 h-3 text-blue-500" />
+                                  <span>Request Tenure Renewal</span>
+                                </button>
+                              )}
+                              <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-500 text-[10px] font-bold font-tech uppercase tracking-wider shrink-0">
+                                {activeContract.status}
+                              </span>
+                            </div>
+                          </div>
+                          {!tenure.isOneTime && (
+                            <div className="w-full h-1.5 rounded-full bg-zinc-500/20 overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-blue-500 transition-all"
+                                style={{ width: `${tenure.progressPct}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                  {/* Quick Action Buttons */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      onClick={() => setActiveModal("invoices-modal")}
+                      className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer ${buttonSecondaryClass}`}
+                    >
+                      <span>Invoices ({invoices.length})</span>
+                      <ArrowRight className="w-3.5 h-3.5 opacity-60" />
+                    </button>
+                    <button
+                      onClick={() => setActiveModal("payments-modal")}
+                      className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition cursor-pointer ${buttonSecondaryClass}`}
+                    >
+                      <span>Payments ({payments.length})</span>
+                      <ArrowRight className="w-3.5 h-3.5 opacity-60" />
+                    </button>
+                  </div>
+                </>
+              );
+            })()
           )}
         </div>
       )}

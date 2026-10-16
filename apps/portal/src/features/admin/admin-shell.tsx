@@ -28,6 +28,7 @@ import {
   BookOpen,
 } from "lucide-react";
 import { RapidShiftLogo } from "@/components/brand/rapidshift-logo";
+import { SmartCommandPalette } from "@/components/smart/command-palette";
 
 interface AdminShellProps {
   userEmail: string;
@@ -194,7 +195,9 @@ export function AdminShell({ userEmail, userRole, children }: AdminShellProps) {
             </div>
 
             {/* Center-Right: System Health Pulse & User Session Profile */}
-            <div className="flex items-center gap-3 sm:gap-4">
+            <div className="flex items-center gap-2.5 sm:gap-3.5">
+              <SmartCommandPalette realm="admin" />
+
               {/* Live engine badge */}
               <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-blue-500/10 text-blue-700 dark:text-blue-400 border border-blue-500/20">
                 <span className="relative flex h-2 w-2">

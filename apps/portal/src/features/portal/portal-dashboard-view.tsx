@@ -25,11 +25,19 @@ import {
   Copy,
   Check,
   Code2,
+  FileText,
+  Printer,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { formatCurrency, formatDate, formatDateTime } from "@/lib/format";
 import { useAlert } from "@/components/ui/alert-popup";
 import { IosSpinner } from "@/components/ui/ios-spinner";
 import { calculateContractTenure, getBillingCycleLabel } from "@/lib/contract-tenure";
+import {
+  generateMonthlyClientDigest,
+  type MonthlyClientExecutiveDigest,
+} from "@/lib/smart-intelligence";
 
 export interface PortalProcessItem {
   id: string;
@@ -127,6 +135,7 @@ export interface PortalDashboardViewProps {
     amountMinor: number;
     currency?: string;
   } | null;
+  monthlyDigest?: MonthlyClientExecutiveDigest;
   processes: PortalProcessItem[];
   domains: PortalDomainItem[];
   tickets: PortalTicketItem[];
@@ -147,6 +156,7 @@ export function PortalDashboardView({
   recentInvoices,
   activeContractsCount,
   activeContract,
+  monthlyDigest,
   processes: initialProcesses,
   domains,
   tickets,
@@ -160,7 +170,21 @@ export function PortalDashboardView({
   const [cooldownTimers, setCooldownTimers] = useState<Record<string, number>>({});
   const [copiedSnippet, setCopiedSnippet] = useState(false);
   const [activeTab, setActiveTab] = useState<"fleet" | "billing" | "domains" | "support" | "releases">("fleet");
+  const [showDigestModal, setShowDigestModal] = useState(false);
   const contractTenure = activeContract ? calculateContractTenure(activeContract) : null;
+  const executiveDigest: MonthlyClientExecutiveDigest =
+    monthlyDigest ??
+    generateMonthlyClientDigest({
+      clientName: client.name,
+      currency: client.currency,
+      healthScore: health.score,
+      healthTier: health.category,
+      domains,
+      processes,
+      releases,
+      tickets,
+      activeContract,
+    });
 
   const isOverdue = billingSummary.outstandingMinor > 0;
 
@@ -312,6 +336,14 @@ export async function middleware(req) {
 
             {/* Quick Action Dock */}
             <div className="flex flex-wrap sm:flex-nowrap gap-2.5 items-center">
+              <button
+                type="button"
+                onClick={() => setShowDigestModal(true)}
+                className="px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-tech text-xs font-semibold shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Monthly Executive Report</span>
+              </button>
               <Link
                 href="/portal/support"
                 className="px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-tech text-xs font-semibold shadow-sm transition flex items-center gap-1.5"
@@ -435,6 +467,107 @@ export async function middleware(req) {
               </Link>
             </div>
           </div>
+        </section>
+
+        {/* Monthly Operations & Value Executive Digest Card */}
+        <section className="bg-white dark:bg-zinc-900 border border-emerald-500/25 dark:border-emerald-800/50 rounded-2xl p-6 shadow-xs space-y-5 relative overflow-hidden">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-zinc-100 dark:border-zinc-800 pb-4">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full text-[11px] font-tech font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                <Sparkles className="w-3 h-3" />
+                <span>{executiveDigest.monthLabel} • Monthly Operations &amp; Value Executive Digest</span>
+              </div>
+              <h2 className="steel-heading text-lg text-zinc-900 dark:text-white">
+                Monthly Operations &amp; Value Executive Digest
+              </h2>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Automated executive summary of infrastructure SLA availability, PM2 runtime velocity, release delivery, and active contract tenure.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowDigestModal(true)}
+                className="px-3.5 py-2 rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 font-tech text-xs font-semibold transition inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <FileText className="w-3.5 h-3.5 text-emerald-500" />
+                <span>View Full Digest</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-tech text-xs font-semibold shadow-xs transition inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Print / Export Executive Digest</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800">
+              <span className="text-[10px] font-tech uppercase tracking-wider text-zinc-400 block">
+                HTTP Availability ({executiveDigest.monthLabel})
+              </span>
+              <div className="mt-1 text-base font-tech font-bold text-emerald-600 dark:text-emerald-400">
+                {executiveDigest.uptimeDeliveredPct}% SLA
+              </div>
+              <span className="text-[11px] text-zinc-500">
+                {executiveDigest.healthyDomainsCount}/{executiveDigest.monitoredDomainsCount} domains healthy
+              </span>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800">
+              <span className="text-[10px] font-tech uppercase tracking-wider text-zinc-400 block">
+                PM2 Fleet &amp; Deployments
+              </span>
+              <div className="mt-1 text-base font-tech font-bold text-zinc-900 dark:text-white">
+                {executiveDigest.onlineProcessesCount}/{executiveDigest.activeProcessesCount} PM2 Online
+              </div>
+              <span className="text-[11px] text-zinc-500">
+                {executiveDigest.totalDeploysAndRestarts} cumulative deployments
+              </span>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800">
+              <span className="text-[10px] font-tech uppercase tracking-wider text-zinc-400 block">
+                Releases Shipped
+              </span>
+              <div className="mt-1 text-base font-tech font-bold text-blue-600 dark:text-blue-400">
+                {executiveDigest.releasesShippedCount} Release(s)
+              </div>
+              <span className="text-[11px] text-zinc-500">
+                Latest version: {executiveDigest.latestReleaseVersion}
+              </span>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800">
+              <span className="text-[10px] font-tech uppercase tracking-wider text-zinc-400 block">
+                Active Contract Tenure
+              </span>
+              <div className="mt-1 text-sm font-tech font-bold text-zinc-900 dark:text-white truncate">
+                {executiveDigest.contractSummary.tenureLabel}
+              </div>
+              <span className="text-[11px] text-zinc-500 block truncate">
+                {executiveDigest.contractSummary.dateRangeLabel} • Next: {executiveDigest.contractSummary.nextBillingDateLabel}
+              </span>
+            </div>
+          </div>
+
+          {executiveDigest.highlights.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
+              {executiveDigest.highlights.map((item, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-300 bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-3.5 py-2.5"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                  <span>{item}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         {/* Operational Filter Tabs */}
@@ -969,6 +1102,123 @@ export async function middleware(req) {
             </pre>
           </div>
         </section>
+
+        {/* Printable Monthly Operations & Value Executive Digest Modal */}
+        {showDigestModal && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl w-full max-w-2xl shadow-2xl p-6 sm:p-8 space-y-6 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-start justify-between gap-4 border-b border-zinc-200 dark:border-zinc-800 pb-4">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-tech font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 mb-2">
+                    <Sparkles className="w-3 h-3" />
+                    <span>{executiveDigest.monthLabel} Executive Report</span>
+                  </div>
+                  <h3 className="text-xl font-bold text-zinc-900 dark:text-white">
+                    Monthly Operations &amp; Value Executive Digest
+                  </h3>
+                  <p className="text-xs text-zinc-500 mt-1">
+                    Prepared for <strong className="text-zinc-800 dark:text-zinc-200">{client.name}</strong> ({client.id}) &bull; Health Standing: {executiveDigest.overallHealthScore}/100 ({executiveDigest.healthTier})
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowDigestModal(false)}
+                  className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
+                  <div className="text-[10px] font-tech uppercase text-zinc-400">HTTP Availability</div>
+                  <div className="text-lg font-tech font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                    {executiveDigest.uptimeDeliveredPct}%
+                  </div>
+                  <div className="text-[11px] text-zinc-500">
+                    {executiveDigest.healthyDomainsCount}/{executiveDigest.monitoredDomainsCount} Domains Up
+                  </div>
+                </div>
+                <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
+                  <div className="text-[10px] font-tech uppercase text-zinc-400">PM2 Processes</div>
+                  <div className="text-lg font-tech font-bold text-zinc-900 dark:text-white mt-1">
+                    {executiveDigest.onlineProcessesCount}/{executiveDigest.activeProcessesCount}
+                  </div>
+                  <div className="text-[11px] text-zinc-500">
+                    {executiveDigest.totalDeploysAndRestarts} cumulative deployments
+                  </div>
+                </div>
+                <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
+                  <div className="text-[10px] font-tech uppercase text-zinc-400">Releases Shipped</div>
+                  <div className="text-lg font-tech font-bold text-blue-600 dark:text-blue-400 mt-1">
+                    {executiveDigest.releasesShippedCount}
+                  </div>
+                  <div className="text-[11px] text-zinc-500">
+                    Latest: {executiveDigest.latestReleaseVersion}
+                  </div>
+                </div>
+                <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-800">
+                  <div className="text-[10px] font-tech uppercase text-zinc-400">SLA Support</div>
+                  <div className="text-lg font-tech font-bold text-zinc-900 dark:text-white mt-1">
+                    {executiveDigest.ticketsResolvedCount} Resolved
+                  </div>
+                  <div className="text-[11px] text-zinc-500">
+                    {executiveDigest.openTicketsCount} currently open
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200/70 dark:border-blue-800/50 space-y-1.5 text-xs">
+                <div className="font-tech font-bold text-blue-700 dark:text-blue-300 uppercase tracking-wider text-[11px]">
+                  Contract &amp; Commercial Tenure Summary ({executiveDigest.contractSummary.code})
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-zinc-700 dark:text-zinc-300">
+                  <span>
+                    Tenure: <strong>{executiveDigest.contractSummary.tenureLabel}</strong> ({executiveDigest.contractSummary.dateRangeLabel})
+                  </span>
+                  <span>
+                    Next Billing: <strong>{executiveDigest.contractSummary.nextBillingDateLabel}</strong>
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs font-tech font-bold uppercase tracking-wider text-zinc-400">
+                  Executive Value &amp; Operations Highlights
+                </div>
+                <div className="space-y-2">
+                  {executiveDigest.highlights.map((h, i) => (
+                    <div
+                      key={i}
+                      className="flex items-start gap-2.5 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/60 dark:border-zinc-800 text-xs text-zinc-700 dark:text-zinc-200"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                      <span>{h}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowDigestModal(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-tech text-xs font-semibold shadow-sm transition inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print / Export Executive Digest</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
