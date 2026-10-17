@@ -19,6 +19,14 @@ const PUBLIC_PATH_PATTERNS = [
   /^\/docs(\/.*)?$/,
   /^\/openapi\.json$/,
   /^\/login$/,
+  /^\/payment-required(\/.*)?$/,
+  /^\/payment-due(\/.*)?$/,
+  /^\/maintenance(\/.*)?$/,
+  /^\/downtime(\/.*)?$/,
+  /^\/unauthorized(\/.*)?$/,
+  /^\/forbidden(\/.*)?$/,
+  /^\/rate-limited(\/.*)?$/,
+  /^\/session-expired(\/.*)?$/,
 ];
 
 export default async function proxy(req: NextRequest) {
@@ -234,7 +242,10 @@ export default async function proxy(req: NextRequest) {
     // Team / Staff Management page: strictly Owner and SuperAdmin
     if (pathname.startsWith("/admin/team")) {
       if (!isOwnerOrSuper) {
-        url.pathname = "/admin";
+        url.pathname = "/unauthorized";
+        url.searchParams.set("reason", "role_restricted");
+        url.searchParams.set("role", role);
+        url.searchParams.set("path", pathname);
         return NextResponse.redirect(url);
       }
     }
@@ -242,7 +253,10 @@ export default async function proxy(req: NextRequest) {
     // Settings page: Owner, SuperAdmin, and Finance (read)
     if (pathname.startsWith("/admin/settings")) {
       if (role === "support" || role === "ops") {
-        url.pathname = "/admin";
+        url.pathname = "/unauthorized";
+        url.searchParams.set("reason", "role_restricted");
+        url.searchParams.set("role", role);
+        url.searchParams.set("path", pathname);
         return NextResponse.redirect(url);
       }
     }
@@ -254,7 +268,10 @@ export default async function proxy(req: NextRequest) {
       pathname.startsWith("/admin/payments")
     ) {
       if (role === "ops" || role === "support") {
-        url.pathname = "/admin";
+        url.pathname = "/unauthorized";
+        url.searchParams.set("reason", "role_restricted");
+        url.searchParams.set("role", role);
+        url.searchParams.set("path", pathname);
         return NextResponse.redirect(url);
       }
     }
@@ -267,7 +284,10 @@ export default async function proxy(req: NextRequest) {
       pathname.startsWith("/admin/embeds")
     ) {
       if (role === "finance") {
-        url.pathname = "/admin";
+        url.pathname = "/unauthorized";
+        url.searchParams.set("reason", "role_restricted");
+        url.searchParams.set("role", role);
+        url.searchParams.set("path", pathname);
         return NextResponse.redirect(url);
       }
     }

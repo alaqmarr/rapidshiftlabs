@@ -153,6 +153,38 @@ const ADMIN_STATIC_COMMANDS: StaticNavCommand[] = [
     keywords: "settings config gst smtp bank",
     icon: Settings,
   },
+  {
+    id: "sys_payment_required",
+    label: "System Page: Payment Required / Access Gate Blocked (402)",
+    subtitle: "3-Stage Tiered Access Gate lock screen (/payment-required & /payment-due)",
+    href: "/payment-required",
+    keywords: "402 payment required due blocked access gate page",
+    icon: CreditCard,
+  },
+  {
+    id: "sys_maintenance",
+    label: "System Page: Scheduled Maintenance Window (503)",
+    subtitle: "Platform upgrade & WAL checkpoint status page (/maintenance)",
+    href: "/maintenance",
+    keywords: "503 maintenance upgrade window status page",
+    icon: Server,
+  },
+  {
+    id: "sys_downtime",
+    label: "System Page: Service Outage & Fail-Open Monitor (503)",
+    subtitle: "Live /api/v1/health probe & SDK fail-open guarantee (/downtime)",
+    href: "/downtime",
+    keywords: "503 downtime outage fail-open status page",
+    icon: Globe,
+  },
+  {
+    id: "sys_unauthorized",
+    label: "System Page: RBAC Role Restricted / Forbidden (403)",
+    subtitle: "Role segregation & realm isolation notice (/unauthorized & /forbidden)",
+    href: "/unauthorized",
+    keywords: "401 403 unauthorized forbidden rbac role page",
+    icon: ShieldCheck,
+  },
 ];
 
 const CLIENT_STATIC_COMMANDS: StaticNavCommand[] = [
