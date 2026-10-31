@@ -228,55 +228,61 @@ export function PortalSupportView({
     };
   }, [clientId]);
 
+  const activeTicketId = activeTicket?.id;
+
   // Fetch messages when activeTicket changes
   useEffect(() => {
-    if (!activeTicket) {
-      setMessages([]);
-      return;
+    if (!activeTicketId) {
+      const clearId = setTimeout(() => setMessages([]), 0);
+      return () => clearTimeout(clearId);
     }
 
     let isMounted = true;
-    setLoadingMessages(true);
+    const initTimer = setTimeout(() => {
+      if (!isMounted) return;
+      setLoadingMessages(true);
 
-    fetch(`/api/v1/tickets/${activeTicket.id}/messages`)
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((data) => {
-        if (!isMounted) return;
-        const rawList = Array.isArray(data)
-          ? data
-          : data.data || data.items || data.messages || [];
+      fetch(`/api/v1/tickets/${activeTicketId}/messages`)
+        .then((res) => (res.ok ? res.json() : Promise.reject()))
+        .then((data) => {
+          if (!isMounted) return;
+          const rawList = Array.isArray(data)
+            ? data
+            : data.data || data.items || data.messages || [];
 
-        const publicOnly = rawList
-          .filter((m: any) => !m.isInternal)
-          .map((m: any) => ({
-            id: m.id,
-            ticketId: m.ticketId,
-            senderId: m.senderId || m.authorId || "",
-            senderName:
-              m.senderName ||
-              m.authorName ||
-              (m.authorType === "admin" ? "RapidShift Support" : userEmail),
-            senderType: (m.senderType ||
-              (m.authorType === "admin" ? "staff" : m.authorType) ||
-              "client") as any,
-            body: m.body,
-            isInternal: Boolean(m.isInternal),
-            createdAt: m.createdAt || Date.now(),
-          }));
+          const publicOnly = rawList
+            .filter((m: any) => !m.isInternal)
+            .map((m: any) => ({
+              id: m.id,
+              ticketId: m.ticketId,
+              senderId: m.senderId || m.authorId || "",
+              senderName:
+                m.senderName ||
+                m.authorName ||
+                (m.authorType === "admin" ? "RapidShift Support" : userEmail),
+              senderType: (m.senderType ||
+                (m.authorType === "admin" ? "staff" : m.authorType) ||
+                "client") as any,
+              body: m.body,
+              isInternal: Boolean(m.isInternal),
+              createdAt: m.createdAt || Date.now(),
+            }));
 
-        setMessages(publicOnly);
-      })
-      .catch(() => {
-        if (isMounted) setMessages([]);
-      })
-      .finally(() => {
-        if (isMounted) setLoadingMessages(false);
-      });
+          setMessages(publicOnly);
+        })
+        .catch(() => {
+          if (isMounted) setMessages([]);
+        })
+        .finally(() => {
+          if (isMounted) setLoadingMessages(false);
+        });
+    }, 0);
 
     return () => {
       isMounted = false;
+      clearTimeout(initTimer);
     };
-  }, [activeTicket?.id, userEmail]);
+  }, [activeTicketId, userEmail]);
 
   const filteredTickets = tickets.filter((t) => {
     const q = searchQuery.toLowerCase().trim();

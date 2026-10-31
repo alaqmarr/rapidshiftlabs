@@ -10,5 +10,7 @@ allowBuilds:
   ssh2: false
 
 overrides:
-  nodemailer: "^10.1.0"
+  next: ">=16.4.1"
+  zod: ">=4.6.6"
+  nodemailer: ">=10.1.4"
 

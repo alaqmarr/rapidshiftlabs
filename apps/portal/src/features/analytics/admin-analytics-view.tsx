@@ -376,7 +376,10 @@ export function AnalyticsSuiteDashboard({
   // Fetch full deep suite on mount in case SSR only passed partial fields
   useEffect(() => {
     if (selectedClientId && (!data.timeseries || !data.visitorSessions)) {
-      fetchSuiteData(selectedClientId, timeRange, true);
+      const id = setTimeout(() => {
+        void fetchSuiteData(selectedClientId, timeRange, true);
+      }, 0);
+      return () => clearTimeout(id);
     }
   }, [selectedClientId, timeRange, data.timeseries, data.visitorSessions, fetchSuiteData]);
 

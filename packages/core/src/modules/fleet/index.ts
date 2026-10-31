@@ -3,11 +3,14 @@ import { DrizzlePm2ProcessRepository } from "./infrastructure/repositories/drizz
 import { DrizzleProcessActionRepository } from "./infrastructure/repositories/drizzle-process-action.repository";
 import { AesEncryptionService } from "./infrastructure/crypto/aes-encryption.service";
 import { NodeSsh2Adapter } from "./infrastructure/adapters/node-ssh2.adapter";
+import { NodeServerAdminOpsAdapter } from "./infrastructure/adapters/node-server-admin.adapter";
 import type { ServerRepository } from "./domain/repositories/server-repository.port";
 import type { Pm2ProcessRepository } from "./domain/repositories/pm2-process-repository.port";
 import type { ProcessActionRepository } from "./domain/repositories/process-action-repository.port";
 import type { EncryptionService } from "./domain/ports/encryption-service.port";
 import type { SshClientPort } from "./domain/ports/ssh-client.port";
+import type { ServerAdminOpsPort } from "./domain/ports/server-admin-ops.port";
+import { ServerAdminOpsUseCase } from "./application/use-cases/server-admin-ops.usecase";
 import { RegisterServerUseCase } from "./application/use-cases/register-server.usecase";
 import { GetServerUseCase } from "./application/use-cases/get-server.usecase";
 import { ListServersUseCase } from "./application/use-cases/list-servers.usecase";
@@ -40,6 +43,7 @@ export * from "./domain/entities/pm2-process.entity";
 export * from "./domain/entities/process-action.entity";
 export * from "./domain/ports/encryption-service.port";
 export * from "./domain/ports/ssh-client.port";
+export * from "./domain/ports/server-admin-ops.port";
 export * from "./domain/repositories/server-repository.port";
 export * from "./domain/repositories/pm2-process-repository.port";
 export * from "./domain/repositories/process-action-repository.port";
@@ -49,6 +53,7 @@ export * from "./application/dtos/server.dto";
 export * from "./application/dtos/pm2-process.dto";
 export * from "./application/dtos/process-action.dto";
 export * from "./application/services/fleet-command-sanitizer";
+export * from "./application/services/server-ops-sanitizer";
 export * from "./application/services/pm2-parser";
 export * from "./application/services/server-stats-parser";
 export * from "./application/use-cases/register-server.usecase";
@@ -63,10 +68,13 @@ export * from "./application/use-cases/list-client-processes.usecase";
 export * from "./application/use-cases/get-server-stats.usecase";
 export * from "./application/services/fleet-diagnostics.service";
 export * from "./application/use-cases/diagnose-and-heal-process.usecase";
+export * from "./application/use-cases/server-admin-ops.usecase";
 
 // Infrastructure exports
 export * from "./infrastructure/crypto/aes-encryption.service";
 export * from "./infrastructure/adapters/node-ssh2.adapter";
+export * from "./infrastructure/adapters/node-server-admin.adapter";
+export * from "./infrastructure/adapters/ssh-pty-session-manager";
 export * from "./infrastructure/repositories/drizzle-server.repository";
 export * from "./infrastructure/repositories/drizzle-pm2-process.repository";
 export * from "./infrastructure/repositories/drizzle-process-action.repository";
@@ -77,6 +85,7 @@ export interface FleetModuleDependencies {
   processActionRepo?: ProcessActionRepository;
   encryptionService?: EncryptionService;
   sshClient?: SshClientPort;
+  serverAdminOps?: ServerAdminOpsPort;
   createTicketUseCase?: CreateTicketUseCase;
   webhookDispatcher?: OutboundWebhookDispatcher;
 }
@@ -87,6 +96,7 @@ export class FleetModule {
   public readonly processActionRepo: ProcessActionRepository;
   public readonly encryptionService: EncryptionService;
   public readonly sshClient: SshClientPort;
+  public readonly serverAdminOps: ServerAdminOpsPort;
 
   public readonly registerServerUseCase: RegisterServerUseCase;
   public readonly getServerUseCase: GetServerUseCase;
@@ -99,6 +109,7 @@ export class FleetModule {
   public readonly listClientProcessesUseCase: ListClientProcessesUseCase;
   public readonly getServerStatsUseCase: GetServerStatsUseCase;
   public readonly diagnoseAndHealUseCase: DiagnoseAndHealProcessUseCase;
+  public readonly adminOpsUseCase: ServerAdminOpsUseCase;
 
   constructor(deps?: FleetModuleDependencies) {
     this.serverRepo = deps?.serverRepo ?? new DrizzleServerRepository();
@@ -106,6 +117,13 @@ export class FleetModule {
     this.processActionRepo = deps?.processActionRepo ?? new DrizzleProcessActionRepository();
     this.encryptionService = deps?.encryptionService ?? new AesEncryptionService();
     this.sshClient = deps?.sshClient ?? new NodeSsh2Adapter();
+    this.serverAdminOps = deps?.serverAdminOps ?? new NodeServerAdminOpsAdapter();
+
+    this.adminOpsUseCase = new ServerAdminOpsUseCase(
+      this.serverRepo,
+      this.encryptionService,
+      this.serverAdminOps
+    );
 
     this.registerServerUseCase = new RegisterServerUseCase(
       this.serverRepo,

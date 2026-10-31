@@ -138,7 +138,10 @@ export function SystemStateShell({
     traceId || `RSL-${httpCode}-${Math.abs(hashCode(pathname)).toString(16).toUpperCase().slice(0, 6)}`;
 
   useEffect(() => {
-    setTimestampStr(new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
+    const id = setTimeout(() => {
+      setTimestampStr(new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
+    }, 0);
+    return () => clearTimeout(id);
   }, []);
 
   const style = TONE_STYLES[tone];

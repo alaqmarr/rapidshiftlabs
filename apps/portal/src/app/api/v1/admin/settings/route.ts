@@ -2,9 +2,13 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
+import { requireAdminRole } from "@/lib/admin-server-guard";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const guard = await requireAdminRole(request, { blockedRoles: ["support", "ops"] });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const container = getContainer();
     const settings = await container.settingsModule.getSettingsUseCase.execute();
     return NextResponse.json(settings);
@@ -16,6 +20,9 @@ export async function GET() {
 
 export async function PUT(request: NextRequest) {
   try {
+    const guard = await requireAdminRole(request, { allowedRoles: ["owner", "superadmin"] });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const body = await request.json();
     const container = getContainer();
 

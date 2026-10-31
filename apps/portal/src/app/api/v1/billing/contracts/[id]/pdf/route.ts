@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
+import { getRequestActor } from "@/lib/auth-actor";
 import type { ContractPdfData } from "@rsl/core/contracts";
 import { formatCurrency, amountInWords } from "@rsl/core/kernel";
 
@@ -20,12 +21,28 @@ export async function GET(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    const actor = await getRequestActor(request);
+    if (!actor) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { id } = await context.params;
     const container = getContainer();
 
     const contract = await container.contractRepo.findById(id);
     if (!contract) {
       return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+    }
+
+    if (actor.kind === "client_user" || actor.kind === "api_key") {
+      if (actor.clientId !== contract.clientId) {
+        return NextResponse.json(
+          { error: "Forbidden: Cannot access another client's contract" },
+          { status: 403 },
+        );
+      }
+    } else if (actor.kind !== "admin") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const [companySettings, client, contacts] = await Promise.all([

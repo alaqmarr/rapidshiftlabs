@@ -2,9 +2,13 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
+import { requireAdminRole } from "@/lib/admin-server-guard";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const guard = await requireAdminRole(request);
+    if (guard.errorResponse) return guard.errorResponse;
+
     const container = getContainer();
     const domains = (await container.monitoredDomainRepo.listAll?.()) ?? [];
     return NextResponse.json({
@@ -18,6 +22,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const guard = await requireAdminRole(request, { blockedRoles: ["finance"] });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const body = await request.json();
     const container = getContainer();
 

@@ -1,10 +1,29 @@
 export const dynamic = "force-dynamic";
 
 import { getContainer } from "@rsl/core/container";
-import { ServerManager, type SerializedServer, type ClientOption } from "@/features/fleet/server-manager";
+import {
+  ServerManager,
+  type SerializedServer,
+  type ClientOption,
+  type ServerWorkspaceTab,
+} from "@/features/fleet/server-manager";
 
-export default async function AdminServersPage() {
+const VALID_TABS = new Set<ServerWorkspaceTab>(["pm2", "nginx", "terminal", "files", "packages"]);
+
+export default async function AdminServersPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const container = getContainer();
+  const resolvedParams = searchParams ? await searchParams : {};
+  const rawTab = typeof resolvedParams.tab === "string" ? resolvedParams.tab : undefined;
+  const initialTab: ServerWorkspaceTab =
+    rawTab && VALID_TABS.has(rawTab as ServerWorkspaceTab)
+      ? (rawTab as ServerWorkspaceTab)
+      : "pm2";
+  const initialServerId =
+    typeof resolvedParams.serverId === "string" ? resolvedParams.serverId : undefined;
 
   let initialServers: SerializedServer[] = [];
   let clientOptions: ClientOption[] = [];
@@ -56,5 +75,12 @@ export default async function AdminServersPage() {
     console.error("[AdminServersPage] Server fetch error:", err);
   }
 
-  return <ServerManager initialServers={initialServers} clients={clientOptions} />;
+  return (
+    <ServerManager
+      initialServers={initialServers}
+      clients={clientOptions}
+      initialTab={initialTab}
+      initialServerId={initialServerId}
+    />
+  );
 }

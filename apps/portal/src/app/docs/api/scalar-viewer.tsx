@@ -37,7 +37,8 @@ export function ScalarViewer({ spec, specUrl = "/openapi.json" }: ScalarViewerPr
       script.onerror = () => setActiveTab("explorer");
       document.body.appendChild(script);
     } else {
-      setScalarLoaded(true);
+      const id = setTimeout(() => setScalarLoaded(true), 0);
+      return () => clearTimeout(id);
     }
   }, [activeTab]);
 

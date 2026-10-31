@@ -2,33 +2,27 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
-import type { Actor } from "@rsl/core/kernel";
 import { ForbiddenError, NotFoundError } from "@rsl/core/kernel";
+import { requireAdminInfraActor } from "@/lib/admin-server-guard";
 
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const guard = await requireAdminInfraActor(request, { allowSupportRead: true });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const { id } = await context.params;
     const searchParams = request.nextUrl.searchParams;
     const linesParam = searchParams.get("lines");
     const lines = linesParam ? Math.min(Math.max(Number(linesParam) || 100, 1), 1000) : 100;
     const container = getContainer();
 
-    const actor: Actor = {
-      kind: "admin",
-      id: "admin_operator",
-      email: "admin@rapidshiftlabs.com",
-      name: "Admin Operator",
-      role: "owner",
-      supportLevel: null,
-    };
-
     const logs = await container.fleetModule.getProcessLogs({
       processId: id,
       options: { lines },
-      actor,
+      actor: guard.actor,
     });
 
     return NextResponse.json({ logs });

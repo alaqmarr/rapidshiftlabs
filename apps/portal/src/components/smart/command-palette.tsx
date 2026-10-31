@@ -24,6 +24,9 @@ import {
   Sparkles,
   X,
   RefreshCw,
+  Terminal,
+  FolderOpen,
+  Package,
 } from "lucide-react";
 import type { CommandPaletteEntityItem } from "@/app/api/v1/smart/command-palette/route";
 
@@ -88,6 +91,38 @@ const ADMIN_STATIC_COMMANDS: StaticNavCommand[] = [
     href: "/admin/servers",
     keywords: "fleet servers pm2 ssh logs restart",
     icon: Server,
+  },
+  {
+    id: "nav_admin_servers_nginx",
+    label: "Nginx Domain Linker & Direct SSL",
+    subtitle: "Visual reverse proxy / static site builder & 1-click Let's Encrypt Certbot SSL",
+    href: "/admin/servers?tab=nginx",
+    keywords: "nginx ssl certbot letsencrypt reverse proxy domain link server",
+    icon: Globe,
+  },
+  {
+    id: "nav_admin_servers_terminal",
+    label: "Interactive Server SSH Terminal",
+    subtitle: "Ultra-low-latency PTY SSH shell with Windows Terminal ergonomics & multi-tab",
+    href: "/admin/servers?tab=terminal",
+    keywords: "ssh terminal shell bash pty console server command",
+    icon: Terminal,
+  },
+  {
+    id: "nav_admin_servers_files",
+    label: "Remote SFTP File Manager & .env Studio",
+    subtitle: "Create, edit, chmod & delete remote files and spin up .env secrets visually",
+    href: "/admin/servers?tab=files",
+    keywords: "sftp file manager env dotenv secrets create edit delete server",
+    icon: FolderOpen,
+  },
+  {
+    id: "nav_admin_servers_packages",
+    label: "Server Outdated Packages & Security Patching",
+    subtitle: "Inspect APT & global Node updates, security advisories & 1-click safe upgrades",
+    href: "/admin/servers?tab=packages",
+    keywords: "packages outdated apt npm updates security patches server upgrade",
+    icon: Package,
   },
   {
     id: "nav_admin_domains",
@@ -298,27 +333,30 @@ export function SmartCommandPalette({ realm }: SmartCommandPaletteProps) {
     }
   }, []);
 
+  const openPalette = useCallback(() => {
+    setQuery("");
+    setSelectedIndex(0);
+    setOpen(true);
+    void fetchLiveEntities();
+    setTimeout(() => inputRef.current?.focus(), 40);
+  }, [fetchLiveEntities]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen((prev) => !prev);
+        if (open) {
+          setOpen(false);
+        } else {
+          openPalette();
+        }
       } else if (e.key === "Escape" && open) {
         setOpen(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open]);
-
-  useEffect(() => {
-    if (open) {
-      setQuery("");
-      setSelectedIndex(0);
-      fetchLiveEntities();
-      setTimeout(() => inputRef.current?.focus(), 40);
-    }
-  }, [open, fetchLiveEntities]);
+  }, [open, openPalette]);
 
   const filteredResults = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -384,10 +422,6 @@ export function SmartCommandPalette({ realm }: SmartCommandPaletteProps) {
     return q ? [...matchedEntities, ...matchedNav] : [...matchedNav.slice(0, 6), ...matchedEntities];
   }, [query, staticCommands, entities]);
 
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [query]);
-
   const handleSelect = (href: string) => {
     setOpen(false);
     router.push(href);
@@ -432,7 +466,7 @@ export function SmartCommandPalette({ realm }: SmartCommandPaletteProps) {
       {/* Trigger Pill in Top Bar */}
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={openPalette}
         className="inline-flex items-center gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium bg-zinc-100/90 dark:bg-zinc-800/80 hover:bg-zinc-200/80 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200/80 dark:border-zinc-700/80 transition cursor-pointer shadow-2xs"
         title="Open Smart Command Palette (Ctrl+K / Cmd+K)"
         data-testid="smart-command-palette-trigger"
@@ -464,7 +498,10 @@ export function SmartCommandPalette({ realm }: SmartCommandPaletteProps) {
                 ref={inputRef}
                 type="text"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setSelectedIndex(0);
+                }}
                 onKeyDown={handleInputKeyDown}
                 placeholder={
                   realm === "admin"

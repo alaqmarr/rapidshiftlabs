@@ -48,11 +48,16 @@ export default function DowntimePage() {
   }, []);
 
   useEffect(() => {
-    void runLiveHealthProbe();
+    const immediate = setTimeout(() => {
+      void runLiveHealthProbe();
+    }, 0);
     const timer = setInterval(() => {
       void runLiveHealthProbe();
     }, 15_000);
-    return () => clearInterval(timer);
+    return () => {
+      clearTimeout(immediate);
+      clearInterval(timer);
+    };
   }, [runLiveHealthProbe]);
 
   return (

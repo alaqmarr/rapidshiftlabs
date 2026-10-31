@@ -100,12 +100,15 @@ export function PortalApiKeysView({
   } | null>(null);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(`rsl_universal_api_key_${clientId}`);
-      if (stored) setSavedUniversalKey(stored);
-    } catch {
-      // ignore storage errors
-    }
+    const id = setTimeout(() => {
+      try {
+        const stored = localStorage.getItem(`rsl_universal_api_key_${clientId}`);
+        if (stored) setSavedUniversalKey(stored);
+      } catch {
+        // ignore storage errors
+      }
+    }, 0);
+    return () => clearTimeout(id);
   }, [clientId]);
 
   const showToast = (message: string, type: "success" | "error" = "success") => {

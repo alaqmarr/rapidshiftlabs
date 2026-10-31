@@ -3,22 +3,16 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
 import { clearGateCache } from "@/lib/cache/lru-cache";
-import type { Actor } from "@rsl/core/kernel";
-
-const ADMIN_ACTOR: Actor = {
-  kind: "admin",
-  id: "adm_system",
-  email: "admin@rapidshift.internal",
-  name: "System Admin",
-  role: "owner",
-  supportLevel: null,
-};
+import { requireAdminRole } from "@/lib/admin-server-guard";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ clientId: string }> },
 ) {
   try {
+    const guard = await requireAdminRole(request);
+    if (guard.errorResponse) return guard.errorResponse;
+
     const { clientId } = await context.params;
     if (!clientId) {
       return NextResponse.json({ error: "Missing clientId" }, { status: 400 });
@@ -57,6 +51,9 @@ export async function POST(
   context: { params: Promise<{ clientId: string }> },
 ) {
   try {
+    const guard = await requireAdminRole(request, { blockedRoles: ["support"] });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const { clientId } = await context.params;
     if (!clientId) {
       return NextResponse.json({ error: "Missing clientId" }, { status: 400 });
@@ -79,9 +76,9 @@ export async function POST(
         mode,
         validUntil: validUntil ? Number(validUntil) : null,
         note: note || undefined,
-        actor: ADMIN_ACTOR,
+        actor: guard.actor,
       },
-      ADMIN_ACTOR,
+      guard.actor,
     );
 
     // Invalidate gate cache so updated override is active immediately
@@ -98,17 +95,20 @@ export async function POST(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ clientId: string }> },
 ) {
   try {
+    const guard = await requireAdminRole(request, { blockedRoles: ["support"] });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const { clientId } = await context.params;
     if (!clientId) {
       return NextResponse.json({ error: "Missing clientId" }, { status: 400 });
     }
 
     const container = getContainer();
-    const result = await container.entitlementModule.clearOverride(clientId, ADMIN_ACTOR);
+    const result = await container.entitlementModule.clearOverride(clientId, guard.actor);
 
     // Invalidate gate cache so cleared override is active immediately
     clearGateCache();

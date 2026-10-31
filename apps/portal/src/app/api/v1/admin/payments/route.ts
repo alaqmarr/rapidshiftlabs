@@ -3,9 +3,13 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
 import { clearGateCache } from "@/lib/cache/lru-cache";
+import { requireAdminRole } from "@/lib/admin-server-guard";
 
 export async function GET(request: NextRequest) {
   try {
+    const guard = await requireAdminRole(request);
+    if (guard.errorResponse) return guard.errorResponse;
+
     const searchParams = request.nextUrl.searchParams;
     const clientId = searchParams.get("clientId") || undefined;
     const invoiceId = searchParams.get("invoiceId") || undefined;
@@ -40,6 +44,9 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const guard = await requireAdminRole(request, { blockedRoles: ["ops", "support"] });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const body = await request.json();
     const container = getContainer();
 

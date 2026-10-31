@@ -2,12 +2,16 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
+import { requireAdminInfraActor } from "@/lib/admin-server-guard";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    const guard = await requireAdminInfraActor(request, { allowSupportRead: true });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const { id } = await context.params;
     const container = getContainer();
 
@@ -20,10 +24,13 @@ export async function GET(
 }
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    const guard = await requireAdminInfraActor(request, { allowSupportRead: true });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const { id } = await context.params;
     const container = getContainer();
 

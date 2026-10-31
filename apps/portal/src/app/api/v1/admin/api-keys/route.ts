@@ -2,19 +2,13 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
-import type { Actor } from "@rsl/core/kernel";
-
-const ADMIN_ACTOR: Actor = {
-  kind: "admin",
-  id: "adm_system",
-  email: "admin@rapidshift.internal",
-  name: "System Admin",
-  role: "owner",
-  supportLevel: null,
-};
+import { requireAdminRole } from "@/lib/admin-server-guard";
 
 export async function GET(request: NextRequest) {
   try {
+    const guard = await requireAdminRole(request);
+    if (guard.errorResponse) return guard.errorResponse;
+
     const searchParams = request.nextUrl.searchParams;
     const clientId = searchParams.get("clientId");
 
@@ -30,7 +24,7 @@ export async function GET(request: NextRequest) {
 
     const keys = await container.apiPlatformModule.listApiKeys({
       clientId,
-      actor: ADMIN_ACTOR,
+      actor: guard.actor,
       includeRevoked,
     });
 
@@ -46,6 +40,9 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const guard = await requireAdminRole(request, { blockedRoles: ["support", "finance"] });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const body = await request.json();
     const { clientId, name, type, scopes, expiresAt } = body;
 
@@ -64,9 +61,9 @@ export async function POST(request: NextRequest) {
         type: type || "secret",
         scopes: Array.isArray(scopes) && scopes.length > 0 ? scopes : ["access:read"],
         expiresAt: expiresAt ? Number(expiresAt) : null,
-        actor: ADMIN_ACTOR,
+        actor: guard.actor,
       },
-      ADMIN_ACTOR,
+      guard.actor,
     );
 
     return NextResponse.json(

@@ -3673,5 +3673,611 @@ export const openApiSpec: OpenApiSpec = {
         },
       },
     },
+    "/api/v1/admin/servers/{id}/files": {
+      get: {
+        summary: "List or Read Remote Server Files via SFTP (Admin)",
+        description: "Lists directory contents or reads a remote text/dotenv file over encrypted SFTP.",
+        operationId: "adminGetServerFiles",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+          {
+            name: "mode",
+            in: "query",
+            required: false,
+            description: "Operation mode: list or read",
+            schema: { type: "string", enum: ["list", "read"], default: "list" },
+            example: "list",
+          },
+          {
+            name: "path",
+            in: "query",
+            required: false,
+            description: "POSIX remote path",
+            schema: { type: "string" },
+            example: "/var/www/client-app",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Directory listing or file content returned",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    directory: { type: "object" },
+                    file: { type: "object" },
+                  },
+                },
+                example: {
+                  directory: {
+                    currentPath: "/var/www/client-app",
+                    entries: [{ name: ".env", type: "file", size: 256, permissionsOctal: "0600" }],
+                  },
+                },
+              },
+            },
+          },
+          "403": {
+            description: "Forbidden",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "forbidden", message: "Operator privileges required" } },
+              },
+            },
+          },
+        },
+      },
+      post: {
+        summary: "Create, Write, Rename, or Chmod Remote File/Folder (Admin)",
+        description: "Creates or updates remote files (including .env with 0600 permissions), directories, renames, or chmods over SFTP.",
+        operationId: "adminMutateServerFile",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["action"],
+                properties: {
+                  action: { type: "string", enum: ["write", "mkdir", "rename", "chmod"] },
+                  path: { type: "string", example: "/var/www/client-app/.env" },
+                  content: { type: "string", example: "NODE_ENV=production\nPORT=3000\n" },
+                  modeOctal: { type: "string", example: "0600" },
+                },
+              },
+              example: {
+                action: "write",
+                path: "/var/www/client-app/.env",
+                content: "NODE_ENV=production\nPORT=3000\n",
+                modeOctal: "0600",
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Remote filesystem mutation completed",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { ok: { type: "boolean" } } },
+                example: { ok: true, path: "/var/www/client-app/.env", size: 28 },
+              },
+            },
+          },
+          "400": {
+            description: "Validation or protected OS path error",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "validation_error", message: "Path is protected" } },
+              },
+            },
+          },
+        },
+      },
+      delete: {
+        summary: "Delete Remote File or Directory (Admin)",
+        description: "Deletes a remote file or directory over SFTP after passing protected OS path checks.",
+        operationId: "adminDeleteServerFile",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+          {
+            name: "path",
+            in: "query",
+            required: true,
+            description: "Remote POSIX path to delete",
+            schema: { type: "string" },
+            example: "/var/www/client-app/.env.bak",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Remote entry deleted",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { ok: { type: "boolean" } } },
+                example: { ok: true, path: "/var/www/client-app/.env.bak" },
+              },
+            },
+          },
+          "400": {
+            description: "Protected system path cannot be deleted",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "validation_error", message: "Cannot delete protected OS path" } },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/v1/admin/servers/{id}/nginx": {
+      get: {
+        summary: "Inspect Server Nginx Virtual Hosts & Listening Ports (Admin)",
+        description: "Returns Nginx status, nginx -t validation, listening TCP ports, and parsed sites-available/sites-enabled virtual hosts.",
+        operationId: "adminGetServerNginx",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Nginx status and virtual hosts returned",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { nginx: { type: "object" } } },
+                example: {
+                  nginx: {
+                    installed: true,
+                    running: true,
+                    certbotInstalled: true,
+                    configTestOk: true,
+                    sites: [],
+                  },
+                },
+              },
+            },
+          },
+          "403": {
+            description: "Forbidden",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "forbidden", message: "Operator privileges required" } },
+              },
+            },
+          },
+        },
+      },
+      post: {
+        summary: "Create/Link Nginx Domain Block, Toggle Site, or Reload Nginx (Admin)",
+        description: "Generates and validates Nginx server blocks (proxy, static/SPA, or redirect), tests with nginx -t, reloads cleanly, and optionally links to Domain Monitor.",
+        operationId: "adminSaveServerNginxSite",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  action: { type: "string", enum: ["save", "toggle", "reload"], default: "save" },
+                  domains: { type: "array", items: { type: "string" } },
+                  mode: { type: "string", enum: ["proxy", "static", "redirect"] },
+                  proxyPort: { type: "integer", example: 3000 },
+                },
+              },
+              example: {
+                action: "save",
+                domains: ["app.clientdomain.com"],
+                mode: "proxy",
+                proxyPort: 3000,
+                enableWebsockets: true,
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Nginx configuration validated and reloaded",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { ok: { type: "boolean" } } },
+                example: { ok: true, filename: "app.clientdomain.com.conf", reloaded: true },
+              },
+            },
+          },
+          "400": {
+            description: "Nginx syntax validation failed (rolled back automatically)",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "nginx_syntax_error", message: "Invalid domain syntax" } },
+              },
+            },
+          },
+        },
+      },
+      delete: {
+        summary: "Delete Nginx Virtual Host Site (Admin)",
+        description: "Removes an Nginx site from sites-enabled and sites-available and reloads Nginx.",
+        operationId: "adminDeleteServerNginxSite",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+          {
+            name: "filename",
+            in: "query",
+            required: true,
+            description: "Site config filename",
+            schema: { type: "string" },
+            example: "app.clientdomain.com.conf",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Nginx site removed",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { ok: { type: "boolean" } } },
+                example: { ok: true, output: "Removed site and reloaded Nginx" },
+              },
+            },
+          },
+          "400": {
+            description: "Invalid site filename",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "validation_error", message: "Invalid filename" } },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/v1/admin/servers/{id}/nginx/ssl": {
+      post: {
+        summary: "Provision Direct Let's Encrypt SSL via Certbot (Admin)",
+        description: "Issues and installs a free Let's Encrypt TLS certificate directly on the server using Certbot Nginx plugin.",
+        operationId: "adminIssueServerNginxSsl",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["domains", "email"],
+                properties: {
+                  domains: { type: "array", items: { type: "string" } },
+                  email: { type: "string", format: "email" },
+                  forceHttpsRedirect: { type: "boolean", default: true },
+                },
+              },
+              example: {
+                domains: ["app.clientdomain.com"],
+                email: "ops@rapidshiftlabs.com",
+                forceHttpsRedirect: true,
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "SSL certificate issued and installed",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { ok: { type: "boolean" } } },
+                example: {
+                  ok: true,
+                  domains: ["app.clientdomain.com"],
+                  certPath: "/etc/letsencrypt/live/app.clientdomain.com/fullchain.pem",
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Certbot validation or DNS challenge error",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "ssl_error", message: "Domain DNS does not point to server" } },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/v1/admin/servers/{id}/packages": {
+      get: {
+        summary: "Scan Outdated Server Packages & Security Advisories (Admin)",
+        description: "Scans APT OS packages and global Node.js NPM packages for available updates and security patches.",
+        operationId: "adminGetServerOutdatedPackages",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Outdated packages report returned",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { report: { type: "object" } } },
+                example: {
+                  report: {
+                    serverId: "srv_01HQ1",
+                    totalCount: 4,
+                    securityCount: 2,
+                    packages: [],
+                  },
+                },
+              },
+            },
+          },
+          "403": {
+            description: "Forbidden",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "forbidden", message: "Forbidden" } },
+              },
+            },
+          },
+        },
+      },
+      post: {
+        summary: "Upgrade Outdated Server Packages Safely (Admin)",
+        description: "Runs non-interactive apt-get --only-upgrade or npm install -g for selected, security-only, or all outdated packages.",
+        operationId: "adminUpgradeServerPackages",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["mode"],
+                properties: {
+                  mode: { type: "string", enum: ["selected", "security", "all"] },
+                  ecosystem: { type: "string", enum: ["apt", "npm-global"] },
+                  packages: { type: "array", items: { type: "string" } },
+                },
+              },
+              example: {
+                mode: "security",
+                ecosystem: "apt",
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Packages upgraded and re-scanned",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { ok: { type: "boolean" } } },
+                example: { ok: true, upgradedCount: 2 },
+              },
+            },
+          },
+          "400": {
+            description: "Invalid package name or upgrade failure",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "validation_error", message: "Invalid package identifier" } },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/v1/admin/servers/{id}/terminal/stream": {
+      get: {
+        summary: "Open Real-Time Interactive SSH PTY Stream (Admin)",
+        description: "Establishes an unbuffered SSE stream connected to a persistent xterm-256color SSH PTY shell session with TCP_NODELAY.",
+        operationId: "adminStreamServerTerminal",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+          {
+            name: "cols",
+            in: "query",
+            required: false,
+            description: "Terminal column width",
+            schema: { type: "integer", default: 120 },
+            example: 120,
+          },
+          {
+            name: "rows",
+            in: "query",
+            required: false,
+            description: "Terminal row height",
+            schema: { type: "integer", default: 32 },
+            example: 32,
+          },
+        ],
+        responses: {
+          "200": {
+            description: "SSE stream of PTY output frames",
+            content: {
+              "text/event-stream": {
+                schema: { type: "string" },
+              },
+            },
+          },
+          "403": {
+            description: "Forbidden",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "forbidden", message: "Operator privileges required" } },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/v1/admin/servers/{id}/terminal/input": {
+      post: {
+        summary: "Send Keystrokes, Resize, or Close SSH PTY Session (Admin)",
+        description: "Dispatches low-latency base64 keystrokes, window resize events, or session close commands to an owned SSH PTY session.",
+        operationId: "adminInputServerTerminal",
+        tags: ["Admin Servers"],
+        security: [{ SessionAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "Server ID",
+            schema: { type: "string" },
+            example: "srv_01HQ1",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["sessionId", "action"],
+                properties: {
+                  sessionId: { type: "string" },
+                  action: { type: "string", enum: ["input", "resize", "close"] },
+                  dataBase64: { type: "string" },
+                  cols: { type: "integer" },
+                  rows: { type: "integer" },
+                },
+              },
+              example: {
+                sessionId: "term_01HQXYZ",
+                action: "input",
+                dataBase64: "bHMgLWxhCg==",
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "PTY action dispatched",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { ok: { type: "boolean" } } },
+                example: { ok: true },
+              },
+            },
+          },
+          "403": {
+            description: "Session ownership mismatch or forbidden",
+            content: {
+              "application/json": {
+                schema: standardErrorSchema,
+                example: { error: { code: "forbidden", message: "Session belongs to another operator" } },
+              },
+            },
+          },
+        },
+      },
+    },
   },
 };

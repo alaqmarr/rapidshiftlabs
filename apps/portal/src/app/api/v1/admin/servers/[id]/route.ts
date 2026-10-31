@@ -2,12 +2,16 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
+import { requireAdminInfraActor, logServerAudit } from "@/lib/admin-server-guard";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    const guard = await requireAdminInfraActor(request, { allowSupportRead: true });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const { id } = await context.params;
     const container = getContainer();
 
@@ -33,6 +37,9 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    const guard = await requireAdminInfraActor(request);
+    if (guard.errorResponse) return guard.errorResponse;
+
     const { id } = await context.params;
     const body = await request.json();
     const container = getContainer();
@@ -90,14 +97,23 @@ export async function PUT(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    const guard = await requireAdminInfraActor(request);
+    if (guard.errorResponse) return guard.errorResponse;
+
     const { id } = await context.params;
     const container = getContainer();
 
     await container.fleetModule.deleteServer(id);
+    await logServerAudit({
+      actor: guard.actor,
+      req: request,
+      serverId: id,
+      action: "server.delete",
+    });
     return NextResponse.json({ success: true });
   } catch (error: any) {
     console.error("[API] Error deleting server:", error);

@@ -372,7 +372,8 @@ describe("Phase 3 End-to-End Acceptance Verification", () => {
       expect(gateResult.allowed).toBe(true);
       expect(gateResult.rapidshiftStatus).toBe("offline");
       // Must not redirect to /payment-due
-      expect(gateResult.status).toBeUndefined();
+      expect(gateResult.status).toBe("allowed");
+      expect(gateResult.redirectUrl).toBeUndefined();
     });
   });
 
@@ -407,7 +408,8 @@ describe("Phase 3 End-to-End Acceptance Verification", () => {
       const gateResult: any = await timeoutGate(new Request("http://localhost:3000/app/dashboard"));
       expect(gateResult.allowed).toBe(true);
       expect(gateResult.rapidshiftStatus).toBe("offline");
-      expect(gateResult.status).toBeUndefined();
+      expect(gateResult.status).toBe("allowed");
+      expect(gateResult.redirectUrl).toBeUndefined();
     });
   });
 });

@@ -105,12 +105,15 @@ export function PortalEmbedsView({
     widgets.find((w) => w.name === selectedWidgetName) || widgets[0];
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(`rsl_universal_api_key_${clientId}`);
-      if (saved) setUniversalApiKey(saved);
-    } catch {
-      // ignore
-    }
+    const id = setTimeout(() => {
+      try {
+        const saved = localStorage.getItem(`rsl_universal_api_key_${clientId}`);
+        if (saved) setUniversalApiKey(saved);
+      } catch {
+        // ignore
+      }
+    }, 0);
+    return () => clearTimeout(id);
   }, [clientId]);
 
   const filteredWidgets = useMemo(() => {

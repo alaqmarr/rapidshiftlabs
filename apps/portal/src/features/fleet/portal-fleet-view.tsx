@@ -187,7 +187,10 @@ export function PortalFleetView({
   }, [clientId]);
 
   useEffect(() => {
-    void loadStats();
+    const id = setTimeout(() => {
+      void loadStats();
+    }, 0);
+    return () => clearTimeout(id);
   }, [loadStats]);
 
   // Auto-Refresh interval (every 15s when enabled)

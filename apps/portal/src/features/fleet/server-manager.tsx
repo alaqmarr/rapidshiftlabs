@@ -34,9 +34,21 @@ import {
   Filter,
   ChevronRight,
   Pencil,
+  Globe,
+  FolderOpen,
+  Package,
+  KeyRound,
 } from "lucide-react";
 import { useAlert } from "@/components/ui/alert-popup";
 import { IosSpinner } from "@/components/ui/ios-spinner";
+import { NginxSslManager } from "./nginx-ssl-manager";
+import { ServerSshTerminal } from "./server-ssh-terminal";
+import { ServerFileManager } from "./server-file-manager";
+import {
+  ServerPackagesPanel,
+  OutdatedPackagesSummaryStrip,
+  type ServerOutdatedPackagesReport,
+} from "./server-packages-panel";
 
 const SERVER_NAME_PRESETS = [
   "RSL Control Plane Host",
@@ -149,9 +161,13 @@ interface DiagnosticResultPayload {
   ticketCreatedId?: string;
 }
 
+export type ServerWorkspaceTab = "pm2" | "nginx" | "terminal" | "files" | "packages";
+
 interface ServerManagerProps {
   initialServers: SerializedServer[];
   clients: ClientOption[];
+  initialTab?: ServerWorkspaceTab;
+  initialServerId?: string;
 }
 
 type ProcessFilterTab = "all" | "online" | "stopped" | "unstable" | "mapped" | "unassigned";
@@ -218,11 +234,31 @@ function MiniSparkline({
   );
 }
 
-export function ServerManager({ initialServers, clients }: ServerManagerProps) {
+export function ServerManager({
+  initialServers,
+  clients,
+  initialTab = "pm2",
+  initialServerId,
+}: ServerManagerProps) {
   const { showSuccess, showError } = useAlert();
   const [servers, setServers] = useState<SerializedServer[]>(initialServers);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(
-    initialServers[0]?.id ?? null
+    initialServerId && initialServers.some((s) => s.id === initialServerId)
+      ? initialServerId
+      : initialServers[0]?.id ?? null
+  );
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<ServerWorkspaceTab>(initialTab);
+  const [prevInitialTab, setPrevInitialTab] = useState<ServerWorkspaceTab>(initialTab);
+  if (initialTab !== prevInitialTab) {
+    setPrevInitialTab(initialTab);
+    setActiveWorkspaceTab(initialTab);
+  }
+  const [fileManagerInitialPath, setFileManagerInitialPath] = useState<string | null>(null);
+  const [outdatedPackagesByServer, setOutdatedPackagesByServer] = useState<
+    Record<string, ServerOutdatedPackagesReport>
+  >({});
+  const [scannedPackageServerIds, setScannedPackageServerIds] = useState<Record<string, boolean>>(
+    {}
   );
   const [serverSearch, setServerSearch] = useState("");
   const [serverStats, setServerStats] = useState<Record<string, ServerStatsData>>({});
@@ -302,11 +338,65 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
     [servers, selectedServerId]
   );
   const selectedStats = selectedServerId ? serverStats[selectedServerId] : null;
+  const selectedPackagesReport = selectedServerId
+    ? outdatedPackagesByServer[selectedServerId] ?? null
+    : null;
+  const isScanningSelectedPackages = Boolean(
+    selectedServerId &&
+      !outdatedPackagesByServer[selectedServerId] &&
+      !scannedPackageServerIds[selectedServerId]
+  );
 
-  // Clear bulk selection when switching servers
-  useEffect(() => {
+  const handleSelectServer = useCallback((id: string | null) => {
+    setSelectedServerId(id);
     setSelectedProcessIds([]);
-  }, [selectedServerId]);
+  }, []);
+
+  const switchWorkspaceTab = useCallback((tab: ServerWorkspaceTab, targetPath?: string) => {
+    if (targetPath !== undefined) {
+      setFileManagerInitialPath(targetPath);
+    } else if (tab !== "files") {
+      setFileManagerInitialPath(null);
+    }
+    setActiveWorkspaceTab(tab);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (tab === "pm2") {
+        url.searchParams.delete("tab");
+      } else {
+        url.searchParams.set("tab", tab);
+      }
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []);
+
+  // Automatically scan outdated packages whenever a server is selected on the Fleet page
+  useEffect(() => {
+    if (!selectedServerId) return;
+    if (outdatedPackagesByServer[selectedServerId] || scannedPackageServerIds[selectedServerId]) {
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/v1/admin/servers/${selectedServerId}/packages`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.report) {
+          setOutdatedPackagesByServer((prev) => ({
+            ...prev,
+            [selectedServerId]: data.report,
+          }));
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) {
+          setScannedPackageServerIds((prev) => ({ ...prev, [selectedServerId]: true }));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedServerId, outdatedPackagesByServer, scannedPackageServerIds]);
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -1345,7 +1435,7 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                   return (
                     <div
                       key={s.id}
-                      onClick={() => setSelectedServerId(s.id)}
+                      onClick={() => handleSelectServer(s.id)}
                       className={`group rounded-xl p-3.5 border transition-all cursor-pointer ${
                         isSelected
                           ? "bg-blue-50/50 dark:bg-blue-950/25 border-blue-500/80 dark:border-blue-500/70 shadow-sm ring-1 ring-blue-500/30"
@@ -1455,7 +1545,7 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
 
                       {/* Process Status Footer & Quick Server Actions */}
                       <div className="mt-3 pt-2.5 border-t border-zinc-200/60 dark:border-zinc-800/70 flex items-center justify-between text-[11px] font-tech">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
                             {onlineCount} online
                           </span>
@@ -1464,7 +1554,19 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                               {stoppedCount} stopped
                             </span>
                           )}
-                          <span className="text-zinc-400 text-[10px]">· {mappedCount} mapped</span>
+                          {outdatedPackagesByServer[s.id]?.totalCount > 0 && (
+                            <span
+                              className={`px-1.5 py-0.5 rounded font-semibold text-[10px] inline-flex items-center gap-1 ${
+                                outdatedPackagesByServer[s.id]!.securityCount > 0
+                                  ? "bg-amber-500/15 text-amber-400"
+                                  : "bg-blue-500/10 text-blue-400"
+                              }`}
+                              title={`${outdatedPackagesByServer[s.id]!.totalCount} outdated packages (${outdatedPackagesByServer[s.id]!.securityCount} security)`}
+                            >
+                              <Package className="w-2.5 h-2.5" />
+                              {outdatedPackagesByServer[s.id]!.totalCount} upd
+                            </span>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-1">
@@ -1641,6 +1743,48 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                           ago
                         </span>
                       )}
+
+                      <button
+                        type="button"
+                        onClick={() => switchWorkspaceTab("terminal")}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border transition font-tech cursor-pointer ${
+                          activeWorkspaceTab === "terminal"
+                            ? "bg-emerald-600 text-white border-emerald-500"
+                            : "bg-zinc-950 hover:bg-zinc-900 text-emerald-400 border-zinc-800"
+                        }`}
+                        title="Open Interactive SSH Terminal"
+                      >
+                        <Terminal className="w-3.5 h-3.5" />
+                        <span>SSH Terminal</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => switchWorkspaceTab("files")}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border transition font-tech cursor-pointer ${
+                          activeWorkspaceTab === "files"
+                            ? "bg-indigo-600 text-white border-indigo-500"
+                            : "bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700"
+                        }`}
+                        title="Open SFTP File Manager & .env Studio"
+                      >
+                        <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Files &amp; .env</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => switchWorkspaceTab("nginx")}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border transition font-tech cursor-pointer ${
+                          activeWorkspaceTab === "nginx"
+                            ? "bg-blue-600 text-white border-blue-500"
+                            : "bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700"
+                        }`}
+                        title="Visual Nginx Domain Linker & Direct Certbot SSL"
+                      >
+                        <Globe className="w-3.5 h-3.5 text-blue-400" />
+                        <span>Nginx &amp; SSL</span>
+                      </button>
 
                       <button
                         type="button"
@@ -1965,9 +2109,161 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                       </p>
                     </div>
                   )}
+
+                  {/* Outdated Packages Live Summary Banner on Server Selection */}
+                  <OutdatedPackagesSummaryStrip
+                    report={selectedPackagesReport}
+                    loading={isScanningSelectedPackages}
+                    onOpenPackagesTab={() => switchWorkspaceTab("packages")}
+                  />
                 </div>
 
+                {/* Server Operations Suite Workspace Tabs */}
+                <div className="flex flex-wrap items-center gap-1.5 p-1.5 rounded-2xl bg-white dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800/90 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => switchWorkspaceTab("pm2")}
+                    className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-tech font-bold transition cursor-pointer ${
+                      activeWorkspaceTab === "pm2"
+                        ? "bg-blue-600 text-white shadow-xs"
+                        : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800/70"
+                    }`}
+                  >
+                    <Gauge className="w-3.5 h-3.5" />
+                    <span>PM2 Processes</span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                        activeWorkspaceTab === "pm2"
+                          ? "bg-white/20 text-white"
+                          : "bg-zinc-200 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-300"
+                      }`}
+                    >
+                      {serverProcessCounts.all}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => switchWorkspaceTab("nginx")}
+                    className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-tech font-bold transition cursor-pointer ${
+                      activeWorkspaceTab === "nginx"
+                        ? "bg-blue-600 text-white shadow-xs"
+                        : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800/70"
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>Nginx &amp; Direct SSL</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => switchWorkspaceTab("terminal")}
+                    className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-tech font-bold transition cursor-pointer ${
+                      activeWorkspaceTab === "terminal"
+                        ? "bg-emerald-600 text-white shadow-xs"
+                        : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800/70"
+                    }`}
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>Interactive SSH</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => switchWorkspaceTab("files")}
+                    className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-tech font-bold transition cursor-pointer ${
+                      activeWorkspaceTab === "files"
+                        ? "bg-indigo-600 text-white shadow-xs"
+                        : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800/70"
+                    }`}
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    <span>File Manager &amp; .env</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => switchWorkspaceTab("packages")}
+                    className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-tech font-bold transition cursor-pointer ${
+                      activeWorkspaceTab === "packages"
+                        ? "bg-amber-600 text-white shadow-xs"
+                        : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800/70"
+                    }`}
+                  >
+                    <Package className="w-3.5 h-3.5" />
+                    <span>Outdated Packages</span>
+                    {selectedPackagesReport && selectedPackagesReport.totalCount > 0 && (
+                      <span
+                        className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                          activeWorkspaceTab === "packages"
+                            ? "bg-white/20 text-white"
+                            : selectedPackagesReport.securityCount > 0
+                            ? "bg-rose-500/20 text-rose-400"
+                            : "bg-amber-500/20 text-amber-400"
+                        }`}
+                      >
+                        {selectedPackagesReport.totalCount}
+                        {selectedPackagesReport.securityCount > 0
+                          ? ` (${selectedPackagesReport.securityCount} sec)`
+                          : ""}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {activeWorkspaceTab === "nginx" && (
+                  <NginxSslManager
+                    key={selectedServer.id}
+                    serverId={selectedServer.id}
+                    serverName={selectedServer.name}
+                    serverHost={selectedServer.host}
+                    processes={selectedServer.processes}
+                    clients={clients}
+                  />
+                )}
+
+                {activeWorkspaceTab === "terminal" && (
+                  <ServerSshTerminal
+                    key={selectedServer.id}
+                    serverId={selectedServer.id}
+                    serverName={selectedServer.name}
+                    serverHost={selectedServer.host}
+                    serverPort={selectedServer.port}
+                    serverUsername={selectedServer.username}
+                    onOpenFileManagerAt={(targetPath) =>
+                      switchWorkspaceTab("files", targetPath)
+                    }
+                  />
+                )}
+
+                {activeWorkspaceTab === "files" && (
+                  <ServerFileManager
+                    key={`${selectedServer.id}:${fileManagerInitialPath || ""}`}
+                    serverId={selectedServer.id}
+                    serverName={selectedServer.name}
+                    processes={selectedServer.processes}
+                    initialPath={fileManagerInitialPath}
+                    onRestartPm2Process={(proc) => handleRestartProcess(proc)}
+                  />
+                )}
+
+                {activeWorkspaceTab === "packages" && (
+                  <ServerPackagesPanel
+                    key={selectedServer.id}
+                    serverId={selectedServer.id}
+                    serverName={selectedServer.name}
+                    initialReport={selectedPackagesReport}
+                    onReportUpdated={(updatedReport) =>
+                      setOutdatedPackagesByServer((prev) => ({
+                        ...prev,
+                        [selectedServer.id]: updatedReport,
+                      }))
+                    }
+                  />
+                )}
+
                 {/* 2. All-in-One PM2 Process Orchestration Suite */}
+                {activeWorkspaceTab === "pm2" && (
                 <div className="bg-white dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800/90 rounded-2xl overflow-hidden shadow-xs">
                   {/* Suite Filter & Search Toolbar */}
                   <div className="p-4 sm:p-5 border-b border-zinc-200 dark:border-zinc-800 space-y-4">
@@ -2394,6 +2690,18 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                                       <span className="hidden xl:inline">Diagnose</span>
                                     </button>
 
+                                    {/* 3b. Quick Project .env / Files Button */}
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        switchWorkspaceTab("files", `/var/www/${proc.name}`)
+                                      }
+                                      className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-400 transition cursor-pointer"
+                                      title={`Open project files & .env Studio for ${proc.name}`}
+                                    >
+                                      <KeyRound className="w-3.5 h-3.5" />
+                                    </button>
+
                                     {/* 4. Advanced Policy Configuration */}
                                     <button
                                       type="button"
@@ -2419,6 +2727,7 @@ export function ServerManager({ initialServers, clients }: ServerManagerProps) {
                     </div>
                   )}
                 </div>
+                )}
               </>
             ) : (
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-12 text-center text-zinc-400">

@@ -45,11 +45,11 @@
     "@react-pdf/renderer": "^4.3.0",
     "drizzle-orm": "^0.45.4",
     "jose": "^6.1.0",
-    "nodemailer": "^10.1.0",
+    "nodemailer": "^10.1.4",
     "react": "19.3.0",
     "ssh2": "^1.17.0",
     "ua-parser-js": "^2.0.4",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^22",

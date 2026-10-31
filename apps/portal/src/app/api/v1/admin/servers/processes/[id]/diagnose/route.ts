@@ -4,12 +4,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
 import type { Actor } from "@rsl/core/kernel";
 import { ForbiddenError, NotFoundError } from "@rsl/core/kernel";
+import { requireAdminInfraActor } from "@/lib/admin-server-guard";
 
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const guard = await requireAdminInfraActor(request, { allowSupportRead: true });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const { id } = await context.params;
     let body: Record<string, any> = {};
     try {
@@ -19,18 +23,9 @@ export async function POST(
     const container = getContainer();
     const autoHeal = Boolean(body.autoHeal);
 
-    const actor: Actor = {
-      kind: "admin",
-      id: "admin_operator",
-      email: "admin@rapidshiftlabs.com",
-      name: "Admin Operator",
-      role: "owner",
-      supportLevel: null,
-    };
-
     const result = await container.fleetModule.diagnoseAndHealProcess({
       processId: id,
-      actor,
+      actor: guard.actor,
       autoHeal,
       createSupportTicketOnFailure: async (ticketData: any) => {
         try {

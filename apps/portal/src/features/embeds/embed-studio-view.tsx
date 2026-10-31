@@ -310,12 +310,15 @@ export function EmbedStudioView({
   const origin = getSiteOrigin();
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(`rsl_universal_api_key_${selectedClientId}`);
-      setUniversalApiKey(saved || "");
-    } catch {
-      // ignore
-    }
+    const id = setTimeout(() => {
+      try {
+        const saved = localStorage.getItem(`rsl_universal_api_key_${selectedClientId}`);
+        setUniversalApiKey(saved || "");
+      } catch {
+        // ignore
+      }
+    }, 0);
+    return () => clearTimeout(id);
   }, [selectedClientId]);
 
   useEffect(() => {

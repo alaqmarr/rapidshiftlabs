@@ -329,55 +329,61 @@ export function AdminSupportView({
     };
   }, []);
 
+  const selectedTicketId = selectedTicket?.id;
+
   // Fetch messages whenever selectedTicket changes
   useEffect(() => {
-    if (!selectedTicket) {
-      setMessages([]);
-      return;
+    if (!selectedTicketId) {
+      const clearId = setTimeout(() => setMessages([]), 0);
+      return () => clearTimeout(clearId);
     }
 
     let isMounted = true;
-    setLoadingMessages(true);
+    const initTimer = setTimeout(() => {
+      if (!isMounted) return;
+      setLoadingMessages(true);
 
-    fetch(`/api/v1/tickets/${selectedTicket.id}/messages`)
-      .then((res) =>
-        res.ok ? res.json() : Promise.reject(new Error("Failed to load"))
-      )
-      .then((data) => {
-        if (!isMounted) return;
-        const list = Array.isArray(data)
-          ? data
-          : data.data || data.items || data.messages || [];
-        const mapped: AdminTicketMessageItem[] = list.map((m: any) => ({
-          id: m.id,
-          ticketId: m.ticketId,
-          authorId: m.authorId || m.senderId || "",
-          authorName:
-            m.authorName ||
-            m.senderName ||
-            (m.authorType === "admin" ? "Staff Operations" : "Client"),
-          authorType:
-            m.authorType ||
-            (m.senderType === "staff" || m.senderType === "system"
-              ? "admin"
-              : "client"),
-          body: m.body,
-          isInternal: Boolean(m.isInternal),
-          createdAt: m.createdAt || Date.now(),
-        }));
-        setMessages(mapped);
-      })
-      .catch(() => {
-        if (isMounted) setMessages([]);
-      })
-      .finally(() => {
-        if (isMounted) setLoadingMessages(false);
-      });
+      fetch(`/api/v1/tickets/${selectedTicketId}/messages`)
+        .then((res) =>
+          res.ok ? res.json() : Promise.reject(new Error("Failed to load"))
+        )
+        .then((data) => {
+          if (!isMounted) return;
+          const list = Array.isArray(data)
+            ? data
+            : data.data || data.items || data.messages || [];
+          const mapped: AdminTicketMessageItem[] = list.map((m: any) => ({
+            id: m.id,
+            ticketId: m.ticketId,
+            authorId: m.authorId || m.senderId || "",
+            authorName:
+              m.authorName ||
+              m.senderName ||
+              (m.authorType === "admin" ? "Staff Operations" : "Client"),
+            authorType:
+              m.authorType ||
+              (m.senderType === "staff" || m.senderType === "system"
+                ? "admin"
+                : "client"),
+            body: m.body,
+            isInternal: Boolean(m.isInternal),
+            createdAt: m.createdAt || Date.now(),
+          }));
+          setMessages(mapped);
+        })
+        .catch(() => {
+          if (isMounted) setMessages([]);
+        })
+        .finally(() => {
+          if (isMounted) setLoadingMessages(false);
+        });
+    }, 0);
 
     return () => {
       isMounted = false;
+      clearTimeout(initTimer);
     };
-  }, [selectedTicket?.id]);
+  }, [selectedTicketId]);
 
   const filteredTickets = tickets.filter((t) => {
     const q = searchQuery.toLowerCase().trim();

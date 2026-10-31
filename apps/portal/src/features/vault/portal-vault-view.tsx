@@ -57,8 +57,8 @@ export function PortalVaultView({
 
   useEffect(() => {
     if (!revealedSecret) {
-      setCountdownSeconds(0);
-      return;
+      const clearId = setTimeout(() => setCountdownSeconds(0), 0);
+      return () => clearTimeout(clearId);
     }
 
     const updateTimer = () => {
@@ -72,9 +72,12 @@ export function PortalVaultView({
       }
     };
 
-    updateTimer();
+    const immediate = setTimeout(updateTimer, 0);
     const interval = setInterval(updateTimer, 250);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(immediate);
+      clearInterval(interval);
+    };
   }, [revealedSecret]);
 
   const filtered = credentials.filter((c) => {

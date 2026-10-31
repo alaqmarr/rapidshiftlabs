@@ -2,9 +2,13 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getContainer } from "@rsl/core/container";
+import { requireAdminInfraActor, logServerAudit } from "@/lib/admin-server-guard";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const guard = await requireAdminInfraActor(request, { allowSupportRead: true });
+    if (guard.errorResponse) return guard.errorResponse;
+
     const container = getContainer();
     const servers = await container.fleetModule.listServers();
     return NextResponse.json({ servers });
@@ -16,6 +20,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const guard = await requireAdminInfraActor(request);
+    if (guard.errorResponse) return guard.errorResponse;
+
     const body = await request.json();
     const container = getContainer();
 
@@ -34,6 +41,14 @@ export async function POST(request: NextRequest) {
       privateKey: body.privateKey,
       keyPassphrase: body.passphrase || body.keyPassphrase || undefined,
       hostFingerprint: body.hostFingerprint || undefined,
+    });
+
+    await logServerAudit({
+      actor: guard.actor,
+      req: request,
+      serverId: server.id,
+      action: "server.register",
+      details: { name: server.name, host: server.host, port: server.port },
     });
 
     return NextResponse.json({ server }, { status: 201 });

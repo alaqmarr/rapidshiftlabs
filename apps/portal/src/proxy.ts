@@ -58,7 +58,7 @@ export default async function proxy(req: NextRequest) {
     if (pathname.startsWith("/admin") || pathname.startsWith("/portal")) {
       return new NextResponse("Not Found", { status: 404 });
     }
-    return NextResponse.next();
+    // Fall through so /api/v1/admin, /api/v1/portal, etc. still enforce session/API-key guards!
   }
 
   if (isAdminHost) {
